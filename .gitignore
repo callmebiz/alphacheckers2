@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual envs (not conda envs, those live outside the repo)
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Model checkpoints and training output
+models/
+checkpoints/
+logs/
+runs/
+*.pt
+*.pth
+*.ckpt
+
+# Training data
+replay_buffer/
+self_play_data/
+*.npy
+*.npz
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env vars / secrets
+.env
+.env.*
+
+# Node (if we ever add a proper frontend build)
+node_modules/
+ui/node_modules/
+# ui/dist/   — uncomment if you add a proper npm build step (currently hand-written, keep in repo)
+
+.claude/
+.pytest_cache/
+mlruns/
