@@ -122,7 +122,7 @@ class MLflowTracker:
 
     def start(self) -> None:
         """Open an MLflow run and log all static params and tags."""
-        name = self._run_name_override or _auto_run_name(self.config)
+        name = _auto_run_name(self.config, prefix=self._run_name_override)
         self._active_run = mlflow.start_run(run_name=name)
         try:
             self._run_name = self._active_run.info.run_name or name
@@ -268,17 +268,19 @@ def _git_hash() -> str:
         return "untracked"
 
 
-def _auto_run_name(config: RunConfig) -> str:
+def _auto_run_name(config: RunConfig, prefix: str | None = None) -> str:
     """
-    Generate a descriptive run name from the key hyperparameters.
-    Example: "medium-8x96-200sims"
-    Encodes enough to identify the run in a list without reading every param.
+    Build a run name that always encodes the key hyperparameters.
+
+    No prefix  → "medium-8x96-200sims"
+    With prefix → "my-label-8x96-200sims"
+
+    The param suffix is always appended so runs are self-describing in the
+    MLflow UI without having to open individual run details.
     """
-    return (
-        f"{config.name}"
-        f"-{config.model.num_resblocks}x{config.model.num_hidden}"
-        f"-{config.mcts.num_simulations}sims"
-    )
+    base   = prefix if prefix else config.name
+    suffix = f"{config.model.num_resblocks}x{config.model.num_hidden}-{config.mcts.num_simulations}sims"
+    return f"{base}-{suffix}"
 
 
 def _set_experiment(name: str) -> None:
