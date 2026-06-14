@@ -101,7 +101,7 @@ class TrainingConfig:
     replay_buffer_size:  int        = 100_000
     min_buffer_size:     int        = 1_000
     grad_clip:           float      = 1.0   # max gradient norm; 0 = disabled
-    num_workers:         int        = 0     # parallel processes for self-play/eval; 0 = cpu_count-1, 1 = sequential
+    num_workers:         int        = 1     # parallel processes for self-play/eval; 0 = cpu_count-1, 1 = sequential
 
 
 @dataclass
@@ -222,6 +222,7 @@ MEDIUM = RunConfig(
         num_iterations=150, num_self_play_games=50, num_epochs=4,
         batch_size=256, replay_buffer_size=200_000, min_buffer_size=1_000,
         lr_milestones=[80, 120, 140],
+        num_workers=1,
     ),
     eval=EvalConfig(tournament_games=20, eval_every_n_iters=2),
 )
