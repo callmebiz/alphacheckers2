@@ -61,6 +61,10 @@ def parse_args() -> argparse.Namespace:
         "--seed", type=int, default=None,
         help="Random seed override (default: from config)",
     )
+    p.add_argument(
+        "--workers", type=int, default=None,
+        help="Override num_workers: 0 = auto (cpu_count-1), 1 = sequential",
+    )
     return p.parse_args()
 
 
@@ -81,6 +85,8 @@ def main() -> None:
         config.device = args.device
     if args.seed is not None:
         config.seed = args.seed
+    if args.workers is not None:
+        config.training.num_workers = args.workers
 
     seed_everything(config.seed)
 
