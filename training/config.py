@@ -155,15 +155,17 @@ class RunConfig:
     seed
         Random seed for reproducibility. Covers Python, NumPy, and PyTorch.
     """
-    name:        str            = "dev"
-    model:       ModelConfig    = field(default_factory=ModelConfig)
-    mcts:        MCTSConfig     = field(default_factory=MCTSConfig)
-    training:    TrainingConfig = field(default_factory=TrainingConfig)
-    eval:        EvalConfig     = field(default_factory=EvalConfig)
-    device:      str            = "auto"
-    run_dir:     str            = "runs"
-    mlflow_uri:  str            = "sqlite:///mlflow.db"
-    seed:        int            = 42
+    name:               str            = "dev"
+    model:              ModelConfig    = field(default_factory=ModelConfig)
+    mcts:               MCTSConfig     = field(default_factory=MCTSConfig)
+    training:           TrainingConfig = field(default_factory=TrainingConfig)
+    eval:               EvalConfig     = field(default_factory=EvalConfig)
+    device:             str            = "auto"
+    run_dir:            str            = "runs"
+    mlflow_uri:         str            = "sqlite:///mlflow.db"
+    mlflow_experiment:  str            = ""   # overrides experiment name in UI; defaults to config.name
+    mlflow_run_name:    str            = ""   # overrides auto-generated run name; "" = auto
+    seed:               int            = 42
 
     def resolve_device(self) -> torch.device:
         """Return the torch.device to use for this run."""

@@ -65,6 +65,14 @@ def parse_args() -> argparse.Namespace:
         "--workers", type=int, default=None,
         help="Override num_workers: 0 = auto (cpu_count-1), 1 = sequential",
     )
+    p.add_argument(
+        "--experiment", default=None,
+        help="MLflow experiment name (groups related runs in the UI)",
+    )
+    p.add_argument(
+        "--run-name", default=None, dest="run_name",
+        help="MLflow run name override (default: auto-generated from config)",
+    )
     return p.parse_args()
 
 
@@ -87,6 +95,10 @@ def main() -> None:
         config.seed = args.seed
     if args.workers is not None:
         config.training.num_workers = args.workers
+    if args.experiment:
+        config.mlflow_experiment = args.experiment
+    if args.run_name:
+        config.mlflow_run_name = args.run_name
 
     seed_everything(config.seed)
 

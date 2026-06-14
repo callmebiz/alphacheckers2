@@ -61,6 +61,7 @@ import dataclasses
 import json
 import math
 import os
+import subprocess
 import tempfile
 
 import mlflow
@@ -77,47 +78,74 @@ class MLflowTracker:
 
     Usage
     -----
-    tracker = MLflowTracker(config, device)
-    tracker.start()                                  # once at run start
-    tracker.log_iteration(iteration, losses, ...)    # once per iteration
-    tracker.end()                                    # once at run end
+    with MLflowTracker(config, device, experiment="baseline") as tracker:
+        tracker.log_training(...)   # once per iteration
+        tracker.log_selfplay(...)
+        tracker.log_evaluation(...) # on eval iterations
+
+    experiment
+        MLflow experiment name — groups related runs for comparison in the UI.
+        Use this to express the research question, not the config name.
+        E.g. "architecture-search", "sims-ablation", "baseline-medium".
+        Defaults to config.name if not provided.
+
+    run_name
+        Optional explicit name for this run. If omitted, a descriptive name
+        is auto-generated from the key hyperparameters:
+        "{config}-{resblocks}x{hidden}-{sims}sims"
+        (e.g. "medium-8x96-200sims").
     """
 
-    def __init__(self, config: RunConfig, device: torch.device):
-        self.config = config
-        self.device = device
+    def __init__(
+        self,
+        config:     RunConfig,
+        device:     torch.device,
+        experiment: str | None = None,
+        run_name:   str | None = None,
+    ):
+        self.config    = config
+        self.device    = device
+        self._experiment = experiment or config.name
+        self._run_name_override = run_name
         self._active_run = None
         self._run_name   = ""
 
         mlflow.set_tracking_uri(config.mlflow_uri)
-        _set_experiment(config.name)
+        _set_experiment(self._experiment)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     @property
     def run_name(self) -> str:
-        """The MLflow auto-generated run name (e.g. 'valiant-crow-891')."""
+        """The run name embedded in replay files for cross-referencing."""
         return self._run_name
 
     def start(self) -> None:
-        """Open an MLflow run and log all static params."""
-        self._active_run = mlflow.start_run()
-        # Capture the auto-generated run name so it can be embedded in replay files.
+        """Open an MLflow run and log all static params and tags."""
+        name = self._run_name_override or _auto_run_name(self.config)
+        self._active_run = mlflow.start_run(run_name=name)
         try:
-            self._run_name = self._active_run.info.run_name or ""
+            self._run_name = self._active_run.info.run_name or name
         except AttributeError:
-            self._run_name = self._active_run.info.run_id[:8]
+            self._run_name = name
 
-        # Flatten the entire RunConfig into param key=value pairs.
-        # Note: config.device is the setting string ("auto"/"cpu"/"cuda").
-        # We also log "resolved_device" — the actual device torch will use —
-        # as a separate key to avoid colliding with the config field.
+        # Tags — metadata that isn't a hyperparameter.
+        # git_commit ties every run to the exact code that produced it so you
+        # can reproduce or diff runs months later.
+        mlflow.set_tags({
+            "git_commit": _git_hash(),
+            "config":     self.config.name,
+            "arch":       f"{self.config.model.num_resblocks}x{self.config.model.num_hidden}",
+            "sims":       str(self.config.mcts.num_simulations),
+            "device":     str(self.device),
+        })
+
+        # Params — all hyperparameters, flattened from the RunConfig dataclass.
         flat = _flatten_dataclass(self.config)
         mlflow.log_params(flat)
-        mlflow.log_param("resolved_device", str(self.device))
-        mlflow.log_param("torch_version",   torch.__version__)
+        mlflow.log_param("torch_version", torch.__version__)
 
-        # Save config as a JSON artifact so the run is fully self-describing
+        # Config JSON artifact — makes the run fully self-describing.
         cfg_dict = dataclasses.asdict(self.config)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False
@@ -228,6 +256,30 @@ class MLflowTracker:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _git_hash() -> str:
+    """Return the short git commit hash, or 'untracked' if not in a repo."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return "untracked"
+
+
+def _auto_run_name(config: RunConfig) -> str:
+    """
+    Generate a descriptive run name from the key hyperparameters.
+    Example: "medium-8x96-200sims"
+    Encodes enough to identify the run in a list without reading every param.
+    """
+    return (
+        f"{config.name}"
+        f"-{config.model.num_resblocks}x{config.model.num_hidden}"
+        f"-{config.mcts.num_simulations}sims"
+    )
+
 
 def _set_experiment(name: str) -> None:
     """

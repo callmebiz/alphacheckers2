@@ -66,7 +66,6 @@ from training.replay_buffer import ReplayBuffer
 from training.self_play import generate_games
 from training.evaluator import run_tournament
 from training.analysis import (
-    compute_game_metrics,
     compute_opening_entropy,
     compute_policy_entropy,
 )
@@ -179,7 +178,11 @@ class Trainer:
         # Local import: keeps mlflow/pandas out of the spawn chain in worker processes.
         from training.tracking import MLflowTracker
 
-        with MLflowTracker(config, self.device) as tracker:
+        with MLflowTracker(
+            config, self.device,
+            experiment=config.mlflow_experiment or None,
+            run_name=config.mlflow_run_name or None,
+        ) as tracker:
             for iteration in outer:
                 if self._shutdown:
                     break
@@ -445,7 +448,7 @@ class Trainer:
 
     # ── Signal handling ───────────────────────────────────────────────────────
 
-    def _handle_signal(self, signum, frame) -> None:
+    def _handle_signal(self, *_) -> None:
         """
         First Ctrl+C: set flag — loop stops after the current game finishes.
         Second Ctrl+C: force-quit immediately (no checkpoint written for this iteration).
