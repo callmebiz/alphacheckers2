@@ -61,3 +61,4 @@ ui/node_modules/
 .claude/
 .pytest_cache/
 mlruns/
+mlflow.db
