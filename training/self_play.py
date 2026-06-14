@@ -62,7 +62,6 @@ The current implementation is sequential for simplicity and Windows compat.
 from __future__ import annotations
 
 import json
-import math
 import os
 import uuid
 from concurrent.futures import as_completed
@@ -289,9 +288,9 @@ def play_game(
 
     # `player` is the terminal player: the one who resigned, couldn't move, or
     # whose turn it is at the end.  `outcome` is from that player's perspective.
-    loser = player
+    terminal_player = player
     examples = [
-        (enc_state, policy, outcome if p == loser else -outcome)
+        (enc_state, policy, outcome if p == terminal_player else -outcome)
         for enc_state, policy, p in recorded
     ]
 

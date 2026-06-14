@@ -69,7 +69,6 @@ from training.analysis import (
     compute_game_metrics,
     compute_opening_entropy,
     compute_policy_entropy,
-    compute_value_calibration,
 )
 from training.elo import EloTracker
 from training import checkpoints
@@ -164,8 +163,9 @@ class Trainer:
             # ratings into the new run and produce misleading starting ELO.
             self.elo._ratings = {}
 
-        tc = config = self.config
-        total_iters = tc.training.num_iterations
+        config = self.config
+        tc     = config.training
+        total_iters = tc.num_iterations
 
         outer = tqdm(
             range(start_iter, total_iters),
@@ -189,7 +189,7 @@ class Trainer:
                 # ── Step 1: Self-play ──────────────────────────────────────
                 outer.set_description(f"{config.name} | self-play")
                 examples, sp_stats = generate_games(
-                    n_games=tc.training.num_self_play_games,
+                    n_games=tc.num_self_play_games,
                     game=self.game,
                     encoder=self.encoder,
                     model=self.best_model,
@@ -210,7 +210,7 @@ class Trainer:
 
                 # ── Step 2: Train network ──────────────────────────────────
                 policy_loss = value_loss = value_mae = 0.0
-                if len(self.buffer) >= tc.training.min_buffer_size:
+                if len(self.buffer) >= tc.min_buffer_size:
                     outer.set_description(f"{config.name} | training")
                     policy_loss, value_loss, value_mae = self._train_epochs()
 
@@ -222,7 +222,7 @@ class Trainer:
                 result   = None
                 cur_elo  = self.elo.rating("best")
 
-                if (iteration + 1) % tc.eval.eval_every_n_iters == 0:
+                if (iteration + 1) % config.eval.eval_every_n_iters == 0:
                     outer.set_description(f"{config.name} | eval")
                     result = run_tournament(
                         self.model, self.best_model,
@@ -246,7 +246,7 @@ class Trainer:
                         result.wins, result.draws, result.losses,
                     )
 
-                    promoted = result.win_rate >= tc.eval.promotion_threshold
+                    promoted = result.win_rate >= config.eval.promotion_threshold
                     if promoted:
                         self.best_model.load_state_dict(self.model.state_dict())
                         self.best_model.eval()

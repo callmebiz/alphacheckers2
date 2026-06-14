@@ -85,11 +85,6 @@ class TournamentResult:
     def total_games(self) -> int:
         return self.wins + self.draws + self.losses
 
-    @property
-    def promoted(self) -> bool:
-        """True if challenger should replace the current best model."""
-        # Computed externally using config.eval.promotion_threshold
-        raise NotImplementedError("Check against config.eval.promotion_threshold")
 
 
 # ── Parallel worker ───────────────────────────────────────────────────────────

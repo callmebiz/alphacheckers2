@@ -30,10 +30,11 @@ Naming convention
 
 from __future__ import annotations
 
-import os
-import glob
-import random
 import dataclasses
+import glob
+import os
+import random
+import shutil
 
 import numpy as np
 import torch
@@ -134,7 +135,6 @@ def save_best(src_path: str, checkpoint_dir: str) -> str:
     Returns the path of the best checkpoint file.
     """
     best_path = os.path.join(checkpoint_dir, "checkpoint_best.pt")
-    import shutil
     shutil.copy2(src_path, best_path)
     return best_path
 

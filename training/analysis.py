@@ -70,7 +70,6 @@ def compute_game_metrics(records: list[GameRecord]) -> dict[str, float]:
     if not records:
         return {}
 
-    outcomes  = [r.outcome for r in records]
     lengths   = [r.num_moves for r in records]
     pieces    = [r.pieces_remaining for r in records]
 
@@ -149,33 +148,4 @@ def compute_policy_entropy(policy_batch: list[np.ndarray]) -> float:
     return float(np.mean(entropies))
 
 
-def compute_value_calibration(
-    value_estimates: list[float],
-    actual_outcomes: list[float],
-) -> dict[str, float]:
-    """
-    Measure how well the network's value head predicts actual game outcomes.
 
-    A perfectly calibrated model would have value_estimate == actual_outcome
-    for every position. In practice we measure:
-
-      MAE  : Mean absolute error — average magnitude of prediction error.
-              Lower is better. Random guessing gives ~0.5 on [-1, 1].
-      Bias : Mean signed error — positive means model is systematically
-              over-optimistic, negative means pessimistic.
-
-    Parameters
-    ----------
-    value_estimates : Network's value output for each recorded position.
-    actual_outcomes : True game outcome (+1/-1/0) for the player at each position.
-    """
-    if not value_estimates:
-        return {}
-
-    v = np.array(value_estimates, dtype=np.float32)
-    o = np.array(actual_outcomes, dtype=np.float32)
-
-    return {
-        "value_mae":  float(np.mean(np.abs(v - o))),
-        "value_bias": float(np.mean(v - o)),
-    }
