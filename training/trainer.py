@@ -320,6 +320,7 @@ class Trainer:
                 if promoted:
                     checkpoints.save_best(ckpt_path, config.checkpoint_dir)
                     tracker.log_model_artifact(ckpt_path, iteration)
+                checkpoints.prune_old_checkpoints(config.checkpoint_dir)
 
                 self._write_status(iteration, policy_loss, value_loss, cur_elo, promoted)
                 self.scheduler.step()

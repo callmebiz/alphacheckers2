@@ -76,12 +76,40 @@ Always run inside `screen` so training survives SSH disconnects:
 ```bash
 screen -S training
 cd alphacheckers2
-python train.py --config medium --workers 0 --experiment baseline
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python train.py --config medium --workers 12 --experiment baseline
 ```
 
-Detach without stopping: `Ctrl+A` then `D`.
+**screen commands:**
 
-Reattach later: `screen -r training`.
+| Action | Command |
+|---|---|
+| Detach (leave running) | `Ctrl+A` then `D` |
+| List sessions | `screen -ls` |
+| Reattach | `screen -r training` |
+| Kill session | type `exit` inside screen |
+
+### Worker count and thread pinning
+
+PyTorch/NumPy use internal BLAS thread pools. Without pinning, each worker
+spawns its own thread pool — 4 workers × 4 threads each = 16 threads fighting
+over 16 cores, leaving none for the main training loop.
+
+`OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` pins each worker to exactly 1 thread,
+so you can safely run 1 worker per core.
+
+**Choosing worker count** for c5.4xlarge (16 vCPUs):
+
+```
+16 vCPUs  −  4 reserved for main process  =  12 game workers
+```
+
+The 4 reserved cores handle: neural net backprop, evaluation, MLflow logging,
+and process orchestration. Fewer than 4 reserved starves the training step.
+
+```bash
+# Quick formula to compute for any instance
+python -c "import os; print(os.cpu_count() - 4)"
+```
 
 ### Monitor training
 
@@ -111,7 +139,8 @@ of work is lost. Resume on the same or a new instance:
 
 ```bash
 cd alphacheckers2
-python train.py --config medium --workers 0 --resume --experiment baseline
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    python train.py --config medium --workers 12 --resume --experiment baseline
 ```
 
 `--resume` with no path auto-finds the latest checkpoint.
@@ -156,7 +185,7 @@ on the same instance soon.
 | On-demand | $0.68/hr |
 | EBS (20 GB) while stopped | ~$0.05/month |
 
-Medium config (~5 hrs with 15 workers): **~$0.35 total**.
+Medium config (~5 hrs with 12 workers): **~$0.35 total**.
 
 Set a billing alert: AWS Console → Billing → Budgets → Create Budget → $5
 threshold. Emails you before any unexpected spend accumulates.
@@ -164,25 +193,29 @@ threshold. Emails you before any unexpected spend accumulates.
 ## Training Config Reference
 
 ```bash
-# Standard medium run
-python train.py --config medium --workers 0 --experiment baseline
+# Standard medium run on c5.4xlarge (12 = 16 vCPUs - 4 reserved)
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    python train.py --config medium --workers 12 --experiment baseline
 
 # Name a specific hypothesis
-python train.py --config medium --workers 0 \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    python train.py --config medium --workers 12 \
     --experiment sims-ablation --run-name 200sims
 
 # Resume latest checkpoint
-python train.py --config medium --workers 0 --resume
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    python train.py --config medium --workers 12 --resume --experiment baseline
 
 # Resume specific checkpoint
-python train.py --config medium --workers 0 \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    python train.py --config medium --workers 12 \
     --resume runs/medium/checkpoints/checkpoint_42.pt
 ```
 
 | Flag | Purpose |
 |---|---|
 | `--config` | Preset: `debug`, `dev`, `medium`, `full` |
-| `--workers 0` | Use all CPU cores for parallel self-play |
+| `--workers N` | Parallel self-play processes; use `cpu_count - 4` on EC2 |
 | `--experiment` | MLflow experiment name (groups related runs) |
 | `--run-name` | Prefix for auto-generated run name |
 | `--resume` | Resume from latest checkpoint |

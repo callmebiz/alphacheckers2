@@ -139,6 +139,25 @@ def save_best(src_path: str, checkpoint_dir: str) -> str:
     return best_path
 
 
+def prune_old_checkpoints(checkpoint_dir: str, keep: int = 3) -> None:
+    """
+    Delete numbered checkpoints beyond the most recent *keep*, preserving
+    checkpoint_best.pt. Prevents disk exhaustion on long runs.
+    """
+    pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
+    files = sorted(
+        [f for f in glob.glob(pattern) if not f.endswith("checkpoint_best.pt")],
+        key=lambda p: int(
+            os.path.basename(p).replace("checkpoint_", "").replace(".pt", "") or -1
+        ),
+    )
+    for old in files[:-keep]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+
+
 def find_latest(checkpoint_dir: str) -> str | None:
     """
     Return the path of the most recent numbered checkpoint, or None if none exist.
