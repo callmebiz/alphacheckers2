@@ -64,10 +64,35 @@ def _status_path() -> str | None:
     return matches[0] if matches else None
 
 
-def _checkpoint_dir() -> str | None:
+def _checkpoint_dirs() -> list[tuple[str, str]]:
+    """Return all (run_name, ckpt_dir) pairs across every run directory."""
     pattern = os.path.join(_RUNS_DIR, "**", "checkpoints")
-    matches = [p for p in glob.glob(pattern, recursive=True) if os.path.isdir(p)]
-    return matches[0] if matches else None
+    result = []
+    for path in glob.glob(pattern, recursive=True):
+        if os.path.isdir(path):
+            parts = os.path.normpath(path).split(os.sep)
+            run_name = parts[-2] if len(parts) >= 2 else "unknown"
+            result.append((run_name, path))
+    return sorted(result)
+
+
+def _resolve_checkpoint(checkpoint_id: str) -> str:
+    """Resolve a 'run/stem' or legacy 'stem' checkpoint ID to an absolute path."""
+    if "/" in checkpoint_id:
+        run_name, stem = checkpoint_id.split("/", 1)
+        for rn, ckpt_dir in _checkpoint_dirs():
+            if rn == run_name:
+                path = os.path.join(ckpt_dir, f"{stem}.pt")
+                if os.path.exists(path):
+                    return path
+        raise ValueError(f"Checkpoint '{checkpoint_id}' not found")
+    dirs = _checkpoint_dirs()
+    if not dirs:
+        raise ValueError("No checkpoint directory found")
+    path = os.path.join(dirs[0][1], f"{checkpoint_id}.pt")
+    if not os.path.exists(path):
+        raise ValueError(f"Checkpoint '{checkpoint_id}' not found")
+    return path
 
 
 def _replay_dirs() -> list[tuple[str, str]]:
@@ -92,12 +117,7 @@ _ai_model_cache: dict[str, AlphaNet] = {}
 def _load_ai_mcts(checkpoint_id: str, num_simulations: int = 200) -> MCTS:
     """Load (or return cached) model and return a fresh MCTS instance for it."""
     if checkpoint_id not in _ai_model_cache:
-        ckpt_dir = _checkpoint_dir()
-        if not ckpt_dir:
-            raise ValueError("No checkpoint directory found")
-        path = os.path.join(ckpt_dir, f"{checkpoint_id}.pt")
-        if not os.path.exists(path):
-            raise ValueError(f"Checkpoint '{checkpoint_id}' not found")
+        path  = _resolve_checkpoint(checkpoint_id)
         data  = torch.load(path, map_location="cpu", weights_only=False)
         cfg   = data["config"]
         model = AlphaNet(
@@ -334,52 +354,56 @@ async def get_status():
 @app.get("/api/checkpoints")
 async def list_checkpoints():
     """
-    Return metadata for all saved checkpoints so the UI can populate a
-    model-selection dropdown (e.g. for "Play vs AI" difficulty).
+    Return metadata for all saved checkpoints across all run directories.
 
-    Each item: {"id": "checkpoint_5", "iteration": 5, "path": "..."}
+    Each item: {"id": "medium/checkpoint_25", "run": "medium", "iteration": 25, ...}
     """
-    ckpt_dir = _checkpoint_dir()
-    if not ckpt_dir or not os.path.isdir(ckpt_dir):
+    all_dirs = _checkpoint_dirs()
+    if not all_dirs:
         return JSONResponse([])
 
     entries = []
-    for fname in sorted(os.listdir(ckpt_dir)):
-        if not fname.endswith(".pt"):
-            continue
-        stem = fname[:-3]  # strip .pt
-        if stem.startswith("checkpoint_"):
-            try:
-                iteration = int(stem.split("_")[-1])
-            except ValueError:
+    for run_name, ckpt_dir in all_dirs:
+        for fname in sorted(os.listdir(ckpt_dir)):
+            if not fname.endswith(".pt"):
+                continue
+            stem = fname[:-3]
+            if stem.startswith("checkpoint_"):
+                try:
+                    iteration = int(stem.split("_")[-1])
+                except ValueError:
+                    iteration = -1
+            elif stem == "checkpoint_best":
                 iteration = -1
-        elif stem == "checkpoint_best" or stem == "best":
-            iteration = -1
-        else:
-            continue
+            else:
+                continue
 
-        # Read sidecar JSON for ELO and buffer size (fast — no .pt load needed)
-        meta: dict = {}
-        sidecar = os.path.join(ckpt_dir, fname.replace(".pt", ".json"))
-        if os.path.exists(sidecar):
-            try:
-                with open(sidecar) as f:
-                    meta = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
+            meta: dict = {}
+            sidecar = os.path.join(ckpt_dir, fname.replace(".pt", ".json"))
+            if os.path.exists(sidecar):
+                try:
+                    with open(sidecar) as f:
+                        meta = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
 
-        entries.append({
-            "id":        stem,
-            "iteration": meta.get("iteration", iteration),
-            "elo":       meta.get("elo", None),
-            "buffer":    meta.get("buffer", None),
-            "saved_at":  meta.get("saved_at", None),
-            "filename":  fname,
-            "path":      os.path.join(ckpt_dir, fname),
-        })
+            entries.append({
+                "id":        f"{run_name}/{stem}",
+                "run":       run_name,
+                "iteration": meta.get("iteration", iteration),
+                "elo":       meta.get("elo", None),
+                "buffer":    meta.get("buffer", None),
+                "saved_at":  meta.get("saved_at", None),
+                "filename":  fname,
+                "path":      os.path.join(ckpt_dir, fname),
+            })
 
-    # Sort: "best" first, then by iteration descending
-    entries.sort(key=lambda e: (0 if e["id"] == "checkpoint_best" else -e["iteration"]))
+    # Sort: by run name, then best first, then by iteration descending
+    entries.sort(key=lambda e: (
+        e["run"],
+        0 if e["filename"] == "checkpoint_best.pt" else 1,
+        -(e["iteration"] if e["iteration"] >= 0 else 0),
+    ))
     return JSONResponse(entries)
 
 

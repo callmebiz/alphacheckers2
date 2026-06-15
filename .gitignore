@@ -5,8 +5,8 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
-dist/
-build/
+/dist/
+/build/
 *.egg
 
 # Virtual envs (not conda envs, those live outside the repo)
@@ -56,7 +56,7 @@ desktop.ini
 # Node (if we ever add a proper frontend build)
 node_modules/
 ui/node_modules/
-# ui/dist/   — uncomment if you add a proper npm build step (currently hand-written, keep in repo)
+# ui/dist/ is tracked — hand-written UI, no build step
 
 .claude/
 .pytest_cache/

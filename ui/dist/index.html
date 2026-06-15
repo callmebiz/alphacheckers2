@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AlphaCheckers</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      letter-spacing: 0.08em;
+      color: #a78bfa;
+      margin-bottom: 16px;
+    }
+
+    /* ── Nav tabs ─────────────────────────────────────────────────────────── */
+
+    #nav {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      background: #0f0f1f;
+      border-radius: 8px;
+      padding: 4px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      color: #94a3b8;
+      border: none;
+      padding: 8px 24px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tab-btn:hover { background: #1e1e3f; color: #c4b5fd; }
+    .tab-btn.active { background: #4c1d95; color: #e0e0e0; }
+
+    /* ── Tab panels ──────────────────────────────────────────────────────── */
+
+    .tab-panel { display: none; flex-direction: column; align-items: center; width: 100%; }
+    .tab-panel.active { display: flex; }
+
+    /* ── Shared board styles ─────────────────────────────────────────────── */
+
+    #status-bar, #replay-status-bar {
+      height: 2.4em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      color: #c4b5fd;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .board-wrap {
+      position: relative;
+      width: min(90vw, 520px);
+      height: min(90vw, 520px);
+      flex-shrink: 0;
+    }
+
+    .board-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      grid-template-rows: repeat(8, 1fr);
+      border: 3px solid #4c1d95;
+      border-radius: 4px;
+      overflow: hidden;
+      width: 100%;
+      height: 100%;
+    }
+
+    .cell {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+      position: relative;
+    }
+
+    .cell.light { background: #f0d9b5; }
+    .cell.dark  { background: #b58863; }
+    .cell.dark.highlighted { background: #4a7c2f; cursor: pointer; }
+    .cell.dark.selected    { background: #1e5f8a; }
+
+    /* Last-move highlight on replay board */
+    .cell.dark.last-move { background: #7a5c20; }
+
+    @keyframes moveable-pulse {
+      0%, 100% { box-shadow: 0 3px 8px #0008, inset 0 -2px 4px #0005,
+                              0 0 0 3px #facc15, 0 0 12px 4px rgba(250,204,21,0.55); }
+      50%       { box-shadow: 0 3px 8px #0008, inset 0 -2px 4px #0005,
+                              0 0 0 3px #facc15, 0 0 4px 1px rgba(250,204,21,0.15); }
+    }
+
+    .piece {
+      width: 72%;
+      height: 72%;
+      border-radius: 50%;
+      cursor: grab;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      transition: transform 0.08s;
+      -webkit-user-drag: none;
+    }
+    .piece:active { cursor: grabbing; }
+
+    .piece.moveable { animation: moveable-pulse 1.3s ease-in-out infinite; }
+    .piece.static-piece { cursor: default; }
+
+    .piece.p1 {
+      background: radial-gradient(circle at 35% 35%, #f97316, #9a3412);
+      box-shadow: 0 3px 8px #0007, inset 0 -2px 4px #0005;
+    }
+    .piece.p2 {
+      background: radial-gradient(circle at 35% 35%, #e2e8f0, #64748b);
+      box-shadow: 0 3px 8px #0007, inset 0 -2px 4px #0005;
+    }
+    .piece.king::after {
+      content: '♛';
+      color: #fde68a;
+      font-size: 0.65em;
+      position: absolute;
+    }
+
+    .dest-dot {
+      width: 30%;
+      height: 30%;
+      border-radius: 50%;
+      background: rgba(74, 222, 128, 0.6);
+      border: 2px solid rgba(74, 222, 128, 0.95);
+      pointer-events: none;
+    }
+
+    #drag-ghost {
+      position: fixed;
+      pointer-events: none;
+      z-index: 1000;
+      border-radius: 50%;
+      transform: scale(1.15);
+      opacity: 0.92;
+      display: none;
+    }
+
+    /* ── Controls / buttons ──────────────────────────────────────────────── */
+
+    .controls {
+      margin-top: 20px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    button {
+      background: #4c1d95;
+      color: #e0e0e0;
+      border: none;
+      padding: 10px 22px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #6d28d9; }
+    button:disabled { background: #2d2d4f; color: #555; cursor: default; }
+
+    #info {
+      margin-top: 16px;
+      font-size: 0.82rem;
+      color: #94a3b8;
+      text-align: center;
+    }
+
+    .player-tag {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+    .player-tag.p1 { background: #9a3412; color: #fed7aa; }
+    .player-tag.p2 { background: #374151; color: #e2e8f0; }
+
+    /* ── AI config bar ──────────────────────────────────────────────────── */
+
+    #ai-config-bar {
+      width: min(90vw, 520px);
+      background: #0f0f1f;
+      border: 1px solid #2e1065;
+      border-radius: 8px;
+      padding: 10px 16px;
+      margin-bottom: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      align-items: flex-end;
+    }
+
+    #ai-config-bar .filter-group select { min-width: 120px; }
+
+    #btn-start-ai {
+      width: 100%;
+      padding: 9px 0;
+      font-size: 0.9rem;
+      margin-top: 10px;
+    }
+
+    /* ── Checkpoint selector panel ─────────────────────────────────────── */
+
+    #checkpoint-select-wrap {
+      width: min(90vw, 520px);
+      background: #0f0f1f;
+      border: 1px solid #2e1065;
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+    }
+
+    #checkpoint-select-wrap h2 {
+      font-size: 1rem;
+      color: #a78bfa;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    #ckpt-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-bottom: 10px;
+      align-items: flex-end;
+    }
+
+    #ckpt-count-badge {
+      font-size: 0.78rem;
+      color: #475569;
+      margin-bottom: 6px;
+    }
+
+    #ai-model-select {
+      width: 100%;
+      background: #1e1e3f;
+      color: #e0e0e0;
+      border: 1px solid #4c1d95;
+      border-radius: 6px;
+      padding: 4px 0;
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+
+    #ai-model-select option { padding: 6px 12px; }
+
+    #ai-thinking-bar {
+      height: 3px;
+      width: min(90vw, 520px);
+      background: linear-gradient(90deg, #7c3aed, #a78bfa, #7c3aed);
+      background-size: 200%;
+      border-radius: 2px;
+      margin-bottom: 4px;
+      display: none;
+      animation: shimmer 1.2s linear infinite;
+    }
+    @keyframes shimmer { 0%{background-position:100%} 100%{background-position:-100%} }
+
+    /* ── Training tab ────────────────────────────────────────────────────── */
+
+    #training-panel {
+      width: min(90vw, 560px);
+    }
+
+    .train-card {
+      background: #0f0f1f;
+      border: 1px solid #2e1065;
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+      width: 100%;
+    }
+
+    .train-card h2 {
+      font-size: 1rem;
+      color: #a78bfa;
+      margin-bottom: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 5px 0;
+      border-bottom: 1px solid #1e1e3f;
+      font-size: 0.9rem;
+    }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-label { color: #94a3b8; }
+    .metric-value { color: #e2e8f0; font-variant-numeric: tabular-nums; }
+    .metric-value.good  { color: #4ade80; }
+    .metric-value.warn  { color: #facc15; }
+    .metric-value.muted { color: #64748b; }
+
+    .progress-bar-wrap {
+      background: #1e1e3f;
+      border-radius: 4px;
+      height: 8px;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #7c3aed, #a78bfa);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    .train-status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+      background: #64748b;
+    }
+    .train-status-dot.running { background: #4ade80; animation: pulse-dot 1.5s ease-in-out infinite; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    .mlflow-link {
+      display: inline-block;
+      margin-top: 12px;
+      color: #a78bfa;
+      font-size: 0.85rem;
+      text-decoration: none;
+      padding: 6px 14px;
+      border: 1px solid #4c1d95;
+      border-radius: 6px;
+      transition: background 0.15s;
+    }
+    .mlflow-link:hover { background: #1e1e3f; }
+
+    /* ── Replay tab ──────────────────────────────────────────────────────── */
+
+    #replay-panel { width: min(90vw, 560px); }
+
+    #replay-select-wrap {
+      width: 100%;
+      background: #0f0f1f;
+      border: 1px solid #2e1065;
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+    }
+
+    #replay-select-wrap h2 {
+      font-size: 1rem;
+      color: #a78bfa;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* Filter bar ─────────────────────────────────────────────────────────── */
+    #replay-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-bottom: 10px;
+      align-items: flex-end;
+    }
+
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .filter-label {
+      font-size: 0.72rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .filter-group select,
+    .filter-group input[type="number"] {
+      background: #1e1e3f;
+      color: #e0e0e0;
+      border: 1px solid #4c1d95;
+      border-radius: 5px;
+      padding: 5px 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .filter-group select { min-width: 110px; }
+
+    .iter-range-wrap {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .iter-range-wrap input[type="number"] {
+      width: 62px;
+      text-align: center;
+    }
+
+    .iter-sep { color: #64748b; font-size: 0.85rem; }
+
+    /* Count badge + list ─────────────────────────────────────────────────── */
+    #replay-count-badge {
+      font-size: 0.78rem;
+      color: #475569;
+      margin-bottom: 6px;
+    }
+
+    #replay-select {
+      width: 100%;
+      background: #1e1e3f;
+      color: #e0e0e0;
+      border: 1px solid #4c1d95;
+      border-radius: 6px;
+      padding: 4px 0;
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+
+    /* Scrollable list row styling */
+    #replay-select option { padding: 6px 12px; }
+
+    /* Board area always visible — overlay when no replay loaded */
+    .replay-board-area {
+      position: relative;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #replay-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 10, 30, 0.72);
+      border-radius: 4px;
+      z-index: 10;
+      color: #64748b;
+      font-size: 0.95rem;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #replay-status-bar {
+      height: 2.4em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      color: #c4b5fd;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+
+    #replay-meta {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+      font-size: 0.82rem;
+      color: #64748b;
+    }
+    #replay-meta .meta-val { color: #c4b5fd; font-weight: 600; }
+
+    /* Scrubber */
+    #replay-scrubber-wrap {
+      width: 100%;
+      margin: 14px 0 6px;
+    }
+
+    #replay-scrubber {
+      width: 100%;
+      accent-color: #7c3aed;
+      cursor: pointer;
+    }
+
+    #replay-step-label {
+      text-align: center;
+      color: #64748b;
+      font-size: 0.82rem;
+      margin-bottom: 10px;
+    }
+
+    /* Nav buttons */
+    #replay-btn-row {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .step-btn { padding: 8px 16px; font-size: 0.88rem; }
+    .step-btn.primary { background: #5b21b6; }
+    .step-btn.primary:hover { background: #6d28d9; }
+
+    #replay-key-hint {
+      margin-top: 10px;
+      font-size: 0.75rem;
+      color: #475569;
+      text-align: center;
+    }
+
+    #replay-no-games {
+      color: #64748b;
+      font-size: 0.88rem;
+      margin-top: 6px;
+    }
+
+    /* Action-probability heatmap */
+    .cell.chosen-from { outline: 3px solid rgba(253,231,37,0.7); outline-offset: -3px; }
+    .cell.chosen-to   { outline: 3px solid #fde725; outline-offset: -3px; }
+
+    /* Viridis legend bar */
+    #replay-legend {
+      width: 100%;
+      max-width: 440px;
+      margin: 10px 0 4px;
+      padding: 0 2px;
+    }
+    #heatmap-toggle {
+      margin-top: 6px;
+      padding: 3px 10px;
+      font-size: 11px;
+      border: 1px solid #94a3b8;
+      border-radius: 4px;
+      background: #f8fafc;
+      color: #475569;
+      cursor: pointer;
+    }
+    #heatmap-toggle:hover { background: #e2e8f0; }
+    .legend-gradient {
+      height: 12px;
+      border-radius: 3px;
+      background: linear-gradient(to right,#dc2626,#facc15,#16a34a);
+    }
+    .legend-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #475569;
+      margin-top: 3px;
+    }
+  </style>
+</head>
+<body>
+  <h1>AlphaCheckers</h1>
+
+  <!-- Navigation -->
+  <nav id="nav">
+    <button class="tab-btn active" data-tab="play">Play</button>
+    <button class="tab-btn" data-tab="training">Training</button>
+    <button class="tab-btn" data-tab="replay">Replay</button>
+  </nav>
+
+  <!-- ── Play Tab ──────────────────────────────────────────────────────────── -->
+  <div id="play-panel" class="tab-panel active">
+
+    <!-- AI configuration bar -->
+    <div id="ai-config-bar">
+      <div class="filter-group">
+        <span class="filter-label">Opponent</span>
+        <select id="opp-select">
+          <option value="human">Human</option>
+          <option value="ai">AI</option>
+        </select>
+      </div>
+      <div class="filter-group" id="ai-side-group" style="display:none">
+        <span class="filter-label">Play as</span>
+        <select id="ai-side-select">
+          <option value="1">Player 1 (Red)</option>
+          <option value="-1">Player 2 (White)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Checkpoint selector — shown when AI opponent is selected -->
+    <div id="checkpoint-select-wrap" style="display:none">
+      <h2>Select Model</h2>
+      <div id="ckpt-filters">
+        <div class="filter-group">
+          <span class="filter-label">Config</span>
+          <select id="filter-ckpt-run">
+            <option value="">All configs</option>
+          </select>
+        </div>
+      </div>
+      <div id="ckpt-count-badge">Loading…</div>
+      <select id="ai-model-select" size="5">
+        <option value="">— loading models… —</option>
+      </select>
+      <button id="btn-start-ai">Start Game</button>
+    </div>
+
+    <div id="ai-thinking-bar"></div>
+    <div id="status-bar">Connecting…</div>
+    <div class="board-wrap">
+      <div id="board" class="board-grid"></div>
+    </div>
+    <div class="controls">
+      <button id="btn-reset">New Game</button>
+    </div>
+    <div id="info">Drag a piece or click to select, then click a destination.</div>
+  </div>
+
+  <!-- ── Training Tab ──────────────────────────────────────────────────────── -->
+  <div id="training-panel" class="tab-panel">
+
+    <!-- Status card -->
+    <div class="train-card" id="train-status-card">
+      <h2>Status</h2>
+      <div class="metric-row">
+        <span class="metric-label">
+          <span class="train-status-dot" id="train-dot"></span>Training
+        </span>
+        <span class="metric-value" id="train-status-text">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Iteration</span>
+        <span class="metric-value" id="train-iter">—</span>
+      </div>
+      <div class="progress-bar-wrap" id="train-progress-wrap" style="display:none">
+        <div class="progress-bar-fill" id="train-progress-fill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Metrics card -->
+    <div class="train-card">
+      <h2>Latest Metrics</h2>
+      <div class="metric-row">
+        <span class="metric-label">Policy Loss</span>
+        <span class="metric-value" id="train-policy-loss">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Value Loss</span>
+        <span class="metric-value" id="train-value-loss">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">ELO Rating</span>
+        <span class="metric-value" id="train-elo">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Last Evaluation</span>
+        <span class="metric-value" id="train-promoted">—</span>
+      </div>
+    </div>
+
+    <!-- MLflow card -->
+    <div class="train-card">
+      <h2>Experiment Tracking</h2>
+      <p style="font-size:0.85rem;color:#94a3b8;margin-bottom:8px;">
+        MLflow records every metric, loss, and checkpoint for every training run.
+        Start the UI in a separate terminal:
+      </p>
+      <code style="display:block;background:#1e1e3f;padding:8px 12px;border-radius:6px;font-size:0.8rem;color:#c4b5fd;margin-bottom:12px;">
+        mlflow ui --backend-store-uri sqlite:///mlflow.db
+      </code>
+      <a class="mlflow-link" href="http://localhost:5000" target="_blank">Open MLflow UI →</a>
+    </div>
+
+    <!-- Start training instructions -->
+    <div class="train-card">
+      <h2>Start Training</h2>
+      <p style="font-size:0.85rem;color:#94a3b8;margin-bottom:8px;">
+        Run training in a terminal from the project root:
+      </p>
+      <code style="display:block;background:#1e1e3f;padding:8px 12px;border-radius:6px;font-size:0.8rem;color:#c4b5fd;">
+        python train.py --config debug&nbsp;&nbsp;&nbsp;# fast CPU test<br>
+        python train.py --config dev&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# standard run<br>
+        python train.py --config dev --resume&nbsp;&nbsp;# resume latest
+      </code>
+    </div>
+
+  </div>
+
+  <!-- ── Replay Tab ─────────────────────────────────────────────────────────── -->
+  <div id="replay-panel" class="tab-panel">
+
+    <!-- Game selector -->
+    <div id="replay-select-wrap">
+      <h2>Game Replay</h2>
+
+      <!-- Filter controls -->
+      <div id="replay-filters">
+        <div class="filter-group">
+          <span class="filter-label">Run</span>
+          <select id="filter-run">
+            <option value="">All runs</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Outcome</span>
+          <select id="filter-winner">
+            <option value="">All</option>
+            <option value="1">P1 wins</option>
+            <option value="-1">P2 wins</option>
+            <option value="0">Draw</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Iter range</span>
+          <div class="iter-range-wrap">
+            <input type="number" id="filter-iter-min" placeholder="0"  min="0" max="9999">
+            <span class="iter-sep">–</span>
+            <input type="number" id="filter-iter-max" placeholder="∞" min="0" max="9999">
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Resign</span>
+          <select id="filter-resigned">
+            <option value="">All</option>
+            <option value="yes">Resigned</option>
+            <option value="no">Played out</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Type</span>
+          <select id="filter-type">
+            <option value="">All</option>
+            <option value="selfplay">Self-play</option>
+            <option value="tournament">Tournament</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="replay-count-badge">Loading…</div>
+      <select id="replay-select" size="6">
+        <option value="">— loading games… —</option>
+      </select>
+
+      <div id="replay-no-games" style="display:none;margin-top:8px;">
+        No replays yet — run <code style="color:#a78bfa">python train.py --config debug</code> to generate games.
+      </div>
+    </div>
+
+    <!-- Status bar (player to move / result) -->
+    <div id="replay-status-bar">Select a game above to begin</div>
+
+    <!-- Game metadata -->
+    <div id="replay-meta" style="visibility:hidden">
+      <div>Iteration <span class="meta-val" id="ri-iter">—</span></div>
+      <div>Outcome: <span class="meta-val" id="ri-outcome">—</span></div>
+      <div><span class="meta-val" id="ri-moves">—</span> moves</div>
+    </div>
+
+    <!-- Board — always visible; overlay when no replay loaded -->
+    <div class="replay-board-area">
+      <div class="board-wrap">
+        <div id="replay-board" class="board-grid"></div>
+      </div>
+      <div id="replay-overlay">Select a game above to step through it</div>
+    </div>
+
+    <!-- Viridis legend — hidden until a game with prob data is loaded -->
+    <div id="replay-legend" style="display:none">
+      <div class="legend-gradient"></div>
+      <div class="legend-labels">
+        <span>0%</span><span id="heatmap-legend-label">action probabilities (raw visits)</span><span>highest</span>
+      </div>
+      <button id="heatmap-toggle" style="display:none">Heatmap: Raw visits</button>
+    </div>
+
+    <!-- Scrubber + buttons -->
+    <div id="replay-scrubber-wrap">
+      <input type="range" id="replay-scrubber" min="0" max="0" value="0" disabled>
+    </div>
+    <div id="replay-step-label">— / —</div>
+
+    <div id="replay-btn-row">
+      <button class="step-btn" id="btn-replay-start" disabled>⏮ Start</button>
+      <button class="step-btn primary" id="btn-replay-prev" disabled>← Prev</button>
+      <button class="step-btn primary" id="btn-replay-next" disabled>Next →</button>
+      <button class="step-btn" id="btn-replay-end" disabled>End ⏭</button>
+    </div>
+
+    <div id="replay-key-hint">Use ← → arrow keys to step through moves</div>
+
+  </div>
+
+  <!-- Ghost element for drag -->
+  <div id="drag-ghost"></div>
+
+<script>
+(function () {
+'use strict';
+
+// ════════════════════════════════════════════════════════════════
+// Tab routing
+// ════════════════════════════════════════════════════════════════
+
+const TAB_IDS = { play: 'play-panel', training: 'training-panel', replay: 'replay-panel' };
+let activeTab = 'play';
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+function switchTab(name) {
+  if (name === activeTab) return;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === TAB_IDS[name]));
+  activeTab = name;
+  if (name === 'training') initTrainingTab();
+  if (name === 'replay')   initReplayTab();
+}
+
+// ════════════════════════════════════════════════════════════════
+// PLAY TAB
+// ════════════════════════════════════════════════════════════════
+
+const boardEl      = document.getElementById('board');
+const statusEl     = document.getElementById('status-bar');
+const resetBtn     = document.getElementById('btn-reset');
+const ghostEl      = document.getElementById('drag-ghost');
+const thinkingBar  = document.getElementById('ai-thinking-bar');
+
+let ws           = null;
+let gameState    = null;
+let selectedFrom = null;
+let validMovesMap = {};
+let aiThinking   = false;   // true while server is running MCTS
+
+// Drag state
+let drag = null;
+const DRAG_THRESHOLD = 6;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/game`);
+  ws.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.error) { statusEl.textContent = '⚠ ' + data.error; return; }
+    aiThinking   = !!data.thinking;
+    thinkingBar.style.display = aiThinking ? '' : 'none';
+    gameState    = data;
+    selectedFrom = null;
+    buildMovesMap(data.valid_moves);
+    renderGame();
+  };
+  ws.onclose = () => {
+    statusEl.textContent = 'Disconnected — reload to reconnect.';
+    thinkingBar.style.display = 'none';
+  };
+}
+
+function send(obj) { ws && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(obj)); }
+
+function buildMovesMap(moves) {
+  validMovesMap = {};
+  (moves || []).forEach(m => {
+    const key = `${m.from[0]},${m.from[1]}`;
+    if (!validMovesMap[key]) validMovesMap[key] = [];
+    validMovesMap[key].push(m);
+  });
+}
+
+function destinationsOf(r, c) { return validMovesMap[`${r},${c}`] || []; }
+function gameCellEl(r, c) { return boardEl.children[r * 8 + c] || null; }
+
+function renderGame() {
+  if (!gameState) return;
+  const { board, current_player, terminated, value, jump_again } = gameState;
+  const selDests      = selectedFrom ? destinationsOf(selectedFrom.r, selectedFrom.c) : [];
+  const destKeys      = new Set(selDests.map(m => `${m.to[0]},${m.to[1]}`));
+  const selectableKeys = new Set(Object.keys(validMovesMap));
+
+  // Status bar
+  if (aiThinking) {
+    const cls = current_player === 1 ? 'p1' : 'p2';
+    const lbl = current_player === 1 ? 'Player 1 (Red)' : 'Player 2 (White)';
+    statusEl.innerHTML = `<span class="player-tag ${cls}">${lbl}</span>&nbsp;is thinking…`;
+  } else if (terminated) {
+    if      (value ===  1.0) statusEl.innerHTML = `<span class="player-tag ${current_player===1?'p1':'p2'}">Player ${current_player}</span>&nbsp;wins! 🎉`;
+    else if (value === -1.0) statusEl.innerHTML = `<span class="player-tag ${current_player===1?'p2':'p1'}">Player ${current_player===1?2:1}</span>&nbsp;wins! 🎉`;
+    else                     statusEl.textContent = '½–½  Draw';
+  } else {
+    const tag   = `<span class="player-tag ${current_player===1?'p1':'p2'}">Player ${current_player===1?'1 (Red)':'2 (White)'}</span>`;
+    const extra = jump_again ? ' — must continue jumping!' : '';
+    statusEl.innerHTML = `${tag} to move${extra}`;
+  }
+
+  // Board
+  boardEl.innerHTML = '';
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell    = document.createElement('div');
+      const isLight = (r + c) % 2 === 0;
+      cell.className = 'cell ' + (isLight ? 'light' : 'dark');
+
+      if (!isLight && !terminated && !aiThinking) {
+        const key  = `${r},${c}`;
+        const isDest = destKeys.has(key);
+        const isSel  = selectedFrom && selectedFrom.r === r && selectedFrom.c === c;
+        if (isDest)     cell.classList.add('highlighted');
+        else if (isSel) cell.classList.add('selected');
+      }
+
+      const piece = board[r][c];
+      if (piece !== 0) {
+        const p      = document.createElement('div');
+        const owner  = piece > 0 ? 'p1' : 'p2';
+        const isKing = Math.abs(piece) === 2;
+        const canMove = !terminated && !aiThinking && selectableKeys.has(`${r},${c}`);
+        p.className = `piece ${owner}${isKing ? ' king' : ''}${canMove ? ' moveable' : ''}`;
+        if (canMove) p.addEventListener('mousedown', (e) => onPieceMouseDown(e, r, c));
+        cell.appendChild(p);
+        if (!aiThinking && destKeys.has(`${r},${c}`)) cell.addEventListener('click', () => onDestClick(r, c));
+      } else if (!aiThinking && destKeys.has(`${r},${c}`)) {
+        const dot = document.createElement('div');
+        dot.className = 'dest-dot';
+        cell.appendChild(dot);
+        cell.addEventListener('click', () => onDestClick(r, c));
+      }
+
+      boardEl.appendChild(cell);
+    }
+  }
+}
+
+function onPieceMouseDown(e, r, c) {
+  if (!gameState || gameState.terminated) return;
+  if (!destinationsOf(r, c).length) return;
+  e.preventDefault();
+  drag = { phase: 'pending', r, c, startX: e.clientX, startY: e.clientY };
+}
+
+document.addEventListener('mousemove', (e) => {
+  if (!drag) return;
+  if (drag.phase === 'pending') {
+    const dist = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+    if (dist < DRAG_THRESHOLD) return;
+    drag.phase = 'dragging';
+    selectedFrom = { r: drag.r, c: drag.c };
+    renderGame();
+    const src = gameCellEl(drag.r, drag.c);
+    const pieceDiv = src && src.querySelector('.piece');
+    if (pieceDiv) {
+      const rect = pieceDiv.getBoundingClientRect();
+      drag.ghostW = rect.width;
+      drag.ghostH = rect.height;
+      ghostEl.className = pieceDiv.className.replace('moveable', '').trim();
+      ghostEl.style.cssText = `display:block;width:${rect.width}px;height:${rect.height}px;left:${e.clientX - rect.width/2}px;top:${e.clientY - rect.height/2}px;`;
+      pieceDiv.style.opacity = '0.25';
+    }
+  }
+  if (drag.phase === 'dragging') {
+    ghostEl.style.left = (e.clientX - drag.ghostW / 2) + 'px';
+    ghostEl.style.top  = (e.clientY - drag.ghostH / 2) + 'px';
+  }
+});
+
+document.addEventListener('mouseup', (e) => {
+  if (!drag) return;
+  const { phase, r, c } = drag;
+  if (phase === 'pending') {
+    drag = null;
+    if (selectedFrom && selectedFrom.r === r && selectedFrom.c === c) {
+      selectedFrom = null; renderGame();
+    } else {
+      selectedFrom = { r, c }; renderGame();
+    }
+    return;
+  }
+  ghostEl.style.display = 'none';
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  ghostEl.style.cssText = '';
+  const orig = gameCellEl(r, c);
+  if (orig) { const p = orig.querySelector('.piece'); if (p) p.style.opacity = ''; }
+  drag = null;
+  const target = el && el.closest('.cell');
+  if (target) {
+    const idx = Array.from(boardEl.children).indexOf(target);
+    if (idx >= 0) {
+      const dropped = onDestClick(Math.floor(idx / 8), idx % 8);
+      if (!dropped) { selectedFrom = null; renderGame(); }
+    }
+  } else { selectedFrom = null; renderGame(); }
+});
+
+function onDestClick(r, c) {
+  if (!selectedFrom) return false;
+  const move = destinationsOf(selectedFrom.r, selectedFrom.c).find(m => m.to[0] === r && m.to[1] === c);
+  if (!move) return false;
+  send({ type: 'move', action: move.action });
+  return true;
+}
+
+connect();
+
+// ── AI config UI ──────────────────────────────────────────────────────────
+
+const oppSelect      = document.getElementById('opp-select');
+const aiSideGroup    = document.getElementById('ai-side-group');
+const aiModelSelect  = document.getElementById('ai-model-select');
+const aiSideSelect   = document.getElementById('ai-side-select');
+const btnStartAi     = document.getElementById('btn-start-ai');
+
+let allCheckpoints = [];
+
+fetch('/api/checkpoints').then(r => r.json()).then(ckpts => {
+  allCheckpoints = ckpts;
+  const filterEl = document.getElementById('filter-ckpt-run');
+  const runs = [...new Set(ckpts.map(c => c.run))].filter(Boolean).sort();
+  runs.forEach(r => {
+    const o = document.createElement('option');
+    o.value = r; o.textContent = r;
+    filterEl.appendChild(o);
+  });
+  applyCheckpointFilters();
+}).catch(() => {
+  aiModelSelect.innerHTML = '<option value="">Server offline</option>';
+  document.getElementById('ckpt-count-badge').textContent = '';
+});
+
+document.getElementById('filter-ckpt-run').addEventListener('change', applyCheckpointFilters);
+
+function applyCheckpointFilters() {
+  const runVal   = document.getElementById('filter-ckpt-run').value;
+  const filtered = allCheckpoints.filter(c => !runVal || c.run === runVal);
+  const badge    = document.getElementById('ckpt-count-badge');
+  badge.textContent = `${filtered.length} checkpoint${filtered.length !== 1 ? 's' : ''}`;
+  if (!filtered.length) {
+    aiModelSelect.innerHTML = '<option value="">No models yet — run training first</option>';
+    return;
+  }
+  aiModelSelect.innerHTML = '<option value="">— choose a model —</option>';
+  filtered.forEach(c => {
+    const o      = document.createElement('option');
+    o.value      = c.id;
+    const isBest = c.filename === 'checkpoint_best.pt';
+    const eloStr = c.elo  != null ? `  ·  ELO ${Math.round(c.elo)}` : '';
+    const dateStr = c.saved_at ? `  ·  ${c.saved_at.slice(0, 10)}` : '';
+    o.textContent = isBest
+      ? `[${c.run}]  ★ Best${eloStr}  ·  Iter ${c.iteration >= 0 ? c.iteration : '?'}`
+      : `[${c.run}]  Iter ${c.iteration}${eloStr}${dateStr}`;
+    aiModelSelect.appendChild(o);
+  });
+}
+
+oppSelect.addEventListener('change', () => {
+  const isAi = oppSelect.value === 'ai';
+  document.getElementById('checkpoint-select-wrap').style.display = isAi ? '' : 'none';
+  aiSideGroup.style.display = isAi ? '' : 'none';
+  if (!isAi) {
+    send({ type: 'ai_config', checkpoint: '', human_player: 1 });
+  }
+});
+
+btnStartAi.addEventListener('click', () => {
+  const checkpoint   = aiModelSelect.value;
+  const human_player = parseInt(aiSideSelect.value, 10);
+  if (!checkpoint) return;
+  selectedFrom = null;
+  drag = null;
+  ghostEl.style.cssText = '';
+  send({ type: 'ai_config', checkpoint, human_player, simulations: 200 });
+});
+
+resetBtn.addEventListener('click', () => {
+  selectedFrom = null;
+  drag = null;
+  ghostEl.style.cssText = '';
+  send({ type: 'reset' });
+});
+
+
+// ════════════════════════════════════════════════════════════════
+// TRAINING TAB
+// ════════════════════════════════════════════════════════════════
+
+let trainWs   = null;
+let trainInit = false;
+
+function initTrainingTab() {
+  if (trainInit) return;
+  trainInit = true;
+
+  // Fetch current status immediately for instant display
+  fetch('/api/status').then(r => r.json()).then(applyTrainingStatus).catch(() => {});
+
+  // Then open WebSocket for live updates
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  trainWs = new WebSocket(`${proto}://${location.host}/ws/training`);
+  trainWs.onmessage = (ev) => {
+    try { applyTrainingStatus(JSON.parse(ev.data)); } catch (_) {}
+  };
+  trainWs.onclose = () => {
+    document.getElementById('train-status-text').textContent = 'Disconnected';
+  };
+}
+
+function applyTrainingStatus(data) {
+  const dot      = document.getElementById('train-dot');
+  const statusTx = document.getElementById('train-status-text');
+  const iterEl   = document.getElementById('train-iter');
+  const pLoss    = document.getElementById('train-policy-loss');
+  const vLoss    = document.getElementById('train-value-loss');
+  const eloEl    = document.getElementById('train-elo');
+  const promEl   = document.getElementById('train-promoted');
+  const progWrap = document.getElementById('train-progress-wrap');
+  const progFill = document.getElementById('train-progress-fill');
+
+  const running = data.is_training === true;
+  dot.className  = 'train-status-dot' + (running ? ' running' : '');
+  statusTx.textContent = running ? 'Running' : (data.phase === 'complete' ? 'Complete' : 'Idle');
+  statusTx.className = 'metric-value' + (running ? ' good' : ' muted');
+
+  if (data.iteration != null) {
+    const total = data.total || '?';
+    iterEl.textContent = `${data.iteration} / ${total}`;
+    if (data.total) {
+      const pct = Math.round(data.iteration / data.total * 100);
+      progWrap.style.display = '';
+      progFill.style.width   = pct + '%';
+    }
+  } else {
+    iterEl.textContent = '—';
+    iterEl.className = 'metric-value muted';
+  }
+
+  const m = data.metrics || {};
+  pLoss.textContent = m.policy_loss != null ? m.policy_loss.toFixed(4) : '—';
+  vLoss.textContent = m.value_loss  != null ? m.value_loss.toFixed(4)  : '—';
+  eloEl.textContent = m.elo         != null ? m.elo.toFixed(0)         : '—';
+
+  if (m.promoted === true) {
+    promEl.textContent = '✓ Promoted';
+    promEl.className = 'metric-value good';
+  } else if (m.promoted === false) {
+    promEl.textContent = '✗ Not promoted';
+    promEl.className = 'metric-value warn';
+  } else {
+    promEl.textContent = '—';
+    promEl.className = 'metric-value muted';
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// REPLAY TAB
+// ════════════════════════════════════════════════════════════════
+
+let replayInit    = false;
+let replayData    = null;   // JSON from /api/replays/{id}
+let replayStep    = 0;
+let heatmapMode   = 'raw';  // 'raw' = raw visit probs (temp=1), 'train' = training probs
+let actionMap     = null;   // action_idx → [from_r, from_c, to_r, to_c]
+let allReplays    = [];     // full list from /api/replays (unfiltered)
+
+// Fetch action map once (small static payload)
+fetch('/api/action-map').then(r => r.json()).then(m => { actionMap = m; }).catch(() => {});
+
+// Red-yellow-green colorscale — 3 key stops, linearly interpolated
+function probColor(t) {
+  const stops = [[220,38,38],[250,204,21],[22,163,74]];  // red → yellow → green
+  const n = stops.length - 1;
+  const i = Math.min(Math.floor(t * n), n - 1);
+  const f = t * n - i;
+  const [r1,g1,b1] = stops[i], [r2,g2,b2] = stops[i+1];
+  return `rgba(${Math.round(r1+f*(r2-r1))},${Math.round(g1+f*(g2-g1))},${Math.round(b1+f*(b2-b1))},0.82)`;
+}
+
+const replayBoardEl  = document.getElementById('replay-board');
+const replayStatusEl = document.getElementById('replay-status-bar');
+const replayOverlay  = document.getElementById('replay-overlay');
+const replaySelect   = document.getElementById('replay-select');
+const replayStepLbl  = document.getElementById('replay-step-label');
+const replayScrubber = document.getElementById('replay-scrubber');
+const replayMeta     = document.getElementById('replay-meta');
+const replayNoGames  = document.getElementById('replay-no-games');
+
+function initReplayTab() {
+  if (replayInit) return;
+  replayInit = true;
+
+  // Draw an empty board immediately so the layout is clear
+  renderEmptyBoard();
+
+  loadReplayList();
+
+  // Filter controls
+  ['filter-run', 'filter-winner', 'filter-resigned', 'filter-type'].forEach(id =>
+    document.getElementById(id).addEventListener('change', applyFilters)
+  );
+  ['filter-iter-min', 'filter-iter-max'].forEach(id =>
+    document.getElementById(id).addEventListener('input', applyFilters)
+  );
+
+  replaySelect.addEventListener('change', () => {
+    const id = replaySelect.value;
+    if (id) loadReplay(id);
+  });
+
+  document.getElementById('btn-replay-start').addEventListener('click', () => setReplayStep(0));
+  document.getElementById('btn-replay-prev') .addEventListener('click', () => setReplayStep(replayStep - 1));
+  document.getElementById('btn-replay-next') .addEventListener('click', () => setReplayStep(replayStep + 1));
+  document.getElementById('btn-replay-end')  .addEventListener('click', () => replayData && setReplayStep(replayData.moves.length - 1));
+
+  replayScrubber.addEventListener('input', () => setReplayStep(parseInt(replayScrubber.value, 10)));
+
+  document.getElementById('heatmap-toggle').addEventListener('click', () => {
+    heatmapMode = heatmapMode === 'raw' ? 'train' : 'raw';
+    renderReplayBoard();
+  });
+}
+
+// Arrow key navigation — only fires when Replay tab is active
+document.addEventListener('keydown', (e) => {
+  if (activeTab !== 'replay' || !replayData) return;
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowDown')  { e.preventDefault(); setReplayStep(replayStep - 1); }
+  if (e.key === 'ArrowRight' || e.key === 'ArrowUp')    { e.preventDefault(); setReplayStep(replayStep + 1); }
+  if (e.key === 'Home') { e.preventDefault(); setReplayStep(0); }
+  if (e.key === 'End')  { e.preventDefault(); setReplayStep(replayData.moves.length - 1); }
+});
+
+function renderEmptyBoard() {
+  replayBoardEl.innerHTML = '';
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+      replayBoardEl.appendChild(cell);
+    }
+  }
+}
+
+function loadReplayList() {
+  fetch('/api/replays').then(r => r.json()).then(items => {
+    // Normalise: old server versions don't emit "session"; fall back to "run"
+    items.forEach(i => { i.session = i.session || i.run || ''; });
+    allReplays = items;
+
+    // Populate run filter with unique session names (MLflow run name, falls
+    // back to config dir name for old replays without mlflow_run_name)
+    const filterRunEl = document.getElementById('filter-run');
+    const sessions = [...new Set(items.map(i => i.session))].sort();
+    filterRunEl.innerHTML = '<option value="">All sessions</option>';
+    sessions.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      filterRunEl.appendChild(o);
+    });
+
+    applyFilters();
+  }).catch(() => {
+    replaySelect.innerHTML = '<option value="">— server not running —</option>';
+  });
+}
+
+function applyFilters() {
+  const runVal      = document.getElementById('filter-run').value;
+  const winnerVal   = document.getElementById('filter-winner').value;
+  const resignedVal = document.getElementById('filter-resigned').value;
+  const typeVal     = document.getElementById('filter-type').value;
+  const iterMinEl   = document.getElementById('filter-iter-min');
+  const iterMaxEl   = document.getElementById('filter-iter-max');
+  const iterMin     = iterMinEl.value !== '' ? parseInt(iterMinEl.value, 10) : -Infinity;
+  const iterMax     = iterMaxEl.value !== '' ? parseInt(iterMaxEl.value, 10) :  Infinity;
+
+  const filtered = allReplays.filter(item => {
+    if (runVal      && item.session !== runVal)            return false;
+    if (winnerVal   && String(item.winner) !== winnerVal) return false;
+    if (resignedVal === 'yes' && !item.resigned)          return false;
+    if (resignedVal === 'no'  &&  item.resigned)          return false;
+    if (typeVal     && (item.game_type || 'selfplay') !== typeVal) return false;
+    if (item.iteration < iterMin || item.iteration > iterMax) return false;
+    return true;
+  });
+
+  const badge = document.getElementById('replay-count-badge');
+  badge.textContent = `${filtered.length} of ${allReplays.length} games`;
+
+  if (!filtered.length) {
+    replaySelect.innerHTML = '<option value="">— no matches —</option>';
+    replayNoGames.style.display = allReplays.length ? 'none' : '';
+    return;
+  }
+  replayNoGames.style.display = 'none';
+  replaySelect.innerHTML = '<option value="">— choose a game —</option>';
+  filtered.forEach(item => {
+    const opt      = document.createElement('option');
+    opt.value      = item.id;
+    const mv       = item.num_moves != null ? `${item.num_moves}mv` : '?mv';
+    const isTournament = (item.game_type === 'tournament');
+    let out, suffix;
+    if (isTournament) {
+      out    = item.challenger_won ? 'Chall.✓' : (item.challenger_won === false ? 'Best✓' : '?');
+      suffix = '  [T]';
+    } else {
+      const w = item.winner;
+      out    = w === 1 ? 'P1 ✓' : w === -1 ? 'P2 ✓' : w === 0 ? 'Draw' : '?';
+      suffix = item.resigned ? '  (R)' : '';
+    }
+    opt.textContent = `[${item.session}]  Iter ${item.iteration}  ·  ${mv}  ·  ${out}${suffix}`;
+    replaySelect.appendChild(opt);
+  });
+}
+
+function loadReplay(id) {
+  replayStatusEl.textContent = 'Loading…';
+  fetch(`/api/replays/${id}`).then(r => r.json()).then(data => {
+    replayData = data;
+    replayStep = 0;
+
+    // Meta row
+    const w = data.winner;
+    let outLabel;
+    if (data.type === 'tournament') {
+      const challSide = data.challenger_is_p1 ? 'P1' : 'P2';
+      outLabel = data.challenger_won ? `Challenger (${challSide}) won` : (data.challenger_won === false ? `Best model won` : '?');
+    } else {
+      outLabel = w === 1 ? 'P1 wins' : w === -1 ? 'P2 wins' : w === 0 ? 'Draw' : '?';
+    }
+    document.getElementById('ri-iter').textContent    = data.iteration;
+    document.getElementById('ri-moves').textContent   = data.num_moves ?? '?';
+    document.getElementById('ri-outcome').textContent = outLabel;
+    replayMeta.style.visibility = 'visible';
+
+    // Scrubber range
+    replayScrubber.max      = data.moves.length - 1;
+    replayScrubber.value    = 0;
+    replayScrubber.disabled = false;
+
+    // Hide overlay — board is now live
+    replayOverlay.style.display = 'none';
+
+    renderReplayBoard();
+  }).catch(err => {
+    replayStatusEl.textContent = 'Failed to load — check server is running.';
+    console.error(err);
+  });
+}
+
+function setReplayStep(n) {
+  if (!replayData) return;
+  replayStep = Math.max(0, Math.min(n, replayData.moves.length - 1));
+  replayScrubber.value = replayStep;
+  renderReplayBoard();
+}
+
+function renderReplayBoard() {
+  if (!replayData) return;
+  const moves  = replayData.moves;
+  const cur    = moves[replayStep];
+  const board  = cur.board;
+  const player = cur.player;
+  const total  = moves.length;
+  const isLast = replayStep === total - 1;
+
+  // Status bar — use winner field (absolute), not relative outcome
+  if (isLast) {
+    const w = replayData.winner;
+    if      (w === 1)  replayStatusEl.innerHTML = '<span class="player-tag p1">Player 1 (Red)</span> wins!';
+    else if (w === -1) replayStatusEl.innerHTML = '<span class="player-tag p2">Player 2 (White)</span> wins!';
+    else               replayStatusEl.textContent = '½–½  Draw';
+  } else {
+    const cls = player === 1 ? 'p1' : 'p2';
+    const lbl = player === 1 ? 'Player 1 (Red)' : 'Player 2 (White)';
+    replayStatusEl.innerHTML = `<span class="player-tag ${cls}">${lbl}</span> to move`;
+  }
+
+  // Step label
+  replayStepLbl.textContent = `Move ${replayStep + 1} of ${total}  (use ← → arrow keys or the slider)`;
+
+  // ── Action-probability heatmap ─────────────────────────────────────────────
+  // destProb[r][c] = sum of probs for all actions whose destination is (r,c)
+  const destProb = Array.from({length: 8}, () => new Float32Array(8));
+  let chosenFromR = -1, chosenFromC = -1, chosenToR = -1, chosenToC = -1;
+
+  // Use raw visit probs (temp=1) by default; fall back if field missing (old replays)
+  const hasRaw    = !!(cur.probs && actionMap);
+  const hasTrain  = !!(cur.train_probs && actionMap);
+  const hasProbs  = hasRaw || hasTrain;
+  const activeProbs = (heatmapMode === 'train' && hasTrain) ? cur.train_probs
+                    : (hasRaw ? cur.probs : cur.train_probs);
+
+  if (hasProbs) {
+    for (const [idxStr, [fr, fc, tr, tc]] of Object.entries(actionMap)) {
+      const p = activeProbs[parseInt(idxStr, 10)];
+      if (p > 0) destProb[tr][tc] += p;
+    }
+    const cm = actionMap[String(cur.action)];
+    if (cm) { [chosenFromR, chosenFromC, chosenToR, chosenToC] = cm; }
+  }
+  const maxP = hasProbs ? Math.max(1e-9, ...destProb.flatMap(row => Array.from(row))) : 1;
+
+  // Toggle button: only show when both modes are available
+  const toggleBtn  = document.getElementById('heatmap-toggle');
+  const legendLbl  = document.getElementById('heatmap-legend-label');
+  toggleBtn.style.display = (hasRaw && hasTrain) ? '' : 'none';
+  if (heatmapMode === 'train') {
+    toggleBtn.textContent = 'Heatmap: Training probs';
+    legendLbl.textContent = 'action probabilities (training signal)';
+  } else {
+    toggleBtn.textContent = 'Heatmap: Raw visits';
+    legendLbl.textContent = 'action probabilities (raw visits)';
+  }
+
+  // Show/hide legend
+  document.getElementById('replay-legend').style.display = hasProbs ? '' : 'none';
+
+  // ── Render board ────────────────────────────────────────────────────────────
+  replayBoardEl.innerHTML = '';
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell    = document.createElement('div');
+      const isLight = (r + c) % 2 === 0;
+      cell.className = 'cell ' + (isLight ? 'light' : 'dark');
+
+      // Viridis heatmap on dark (playable) squares with non-zero destination prob
+      if (!isLight && hasProbs && destProb[r][c] > 0) {
+        cell.style.backgroundColor = probColor(destProb[r][c] / maxP);
+      }
+
+      // Chosen move highlights
+      if (r === chosenFromR && c === chosenFromC) cell.classList.add('chosen-from');
+      if (r === chosenToR   && c === chosenToC)   cell.classList.add('chosen-to');
+
+      const piece = board[r][c];
+      if (piece !== 0) {
+        const p = document.createElement('div');
+        p.className = `piece static-piece ${piece > 0 ? 'p1' : 'p2'}${Math.abs(piece) === 2 ? ' king' : ''}`;
+        cell.appendChild(p);
+      }
+      replayBoardEl.appendChild(cell);
+    }
+  }
+
+  // Button states
+  const atStart = replayStep === 0;
+  const atEnd   = replayStep >= total - 1;
+  document.getElementById('btn-replay-start').disabled = atStart;
+  document.getElementById('btn-replay-prev') .disabled = atStart;
+  document.getElementById('btn-replay-next') .disabled = atEnd;
+  document.getElementById('btn-replay-end')  .disabled = atEnd;
+}
+
+})();
+</script>
+</body>
+</html>
