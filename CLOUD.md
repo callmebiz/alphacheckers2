@@ -17,7 +17,26 @@ interruptions are safe because training checkpoints every iteration.
 
 ## AWS One-Time Setup
 
-### 1. SSH key (Windows)
+### 1. S3 bucket for training output
+
+Spot instances **terminate** (not stop) when shut down — the EBS disk is deleted.
+S3 is the only way to preserve data across runs. Create a bucket once:
+
+```bash
+aws s3 mb s3://your-alphacheckers-bucket --region us-east-1
+```
+
+Pick any globally unique name (e.g. `alphacheckers-biz`). Then when you launch
+your EC2 instance, attach an IAM role with S3 write access:
+
+EC2 Launch Wizard → **Advanced details → IAM instance profile → Create new IAM role**:
+- Trusted entity: EC2
+- Permissions policy: `AmazonS3FullAccess` (or a scoped policy for just your bucket)
+
+With `--s3-bucket` set, `train.sh` uploads `checkpoint_best.pt` and `mlflow.db`
+to S3 automatically before the instance shuts down.
+
+### 2. SSH key (Windows)
 
 Download your `.pem` file from the EC2 key pair page. Move it into your SSH
 folder and set permissions:
@@ -77,15 +96,16 @@ Always run inside `screen` so training survives SSH disconnects:
 ```bash
 screen -S training
 cd alphacheckers2
-./train.sh --config medium --workers 12 --experiment baseline
+./train.sh --config medium --workers 12 --experiment baseline --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
 ```
 
-`train.sh` sets `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` automatically and
-forwards all args to `train.py`. Auto-shutdown when training completes:
+`train.sh` sets `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` automatically. When
+`--s3-bucket` is provided, it uploads `checkpoint_best.pt` and `mlflow.db` to
+S3 after training finishes — before `shutdown` runs. The instance then
+terminates and all data is safe in S3.
 
-```bash
-./train.sh --config medium --workers 12 --experiment baseline && sudo shutdown -h now
-```
+> **Never run `sudo shutdown` without `--s3-bucket`** — spot instances delete
+> their disk on termination.
 
 At startup you will see a disk warning if free space is below 5 GB:
 
@@ -172,59 +192,52 @@ see a resume banner confirming what was restored:
 Resumed iter 25 | ELO 2020 | buffer 88,000 | disk free 9.3 GB
 ```
 
-### Download results
+### Download results from S3
 
-From your local PowerShell when training is complete:
+After training completes (instance already terminated), pull the data locally:
 
 ```powershell
-# Best model checkpoint
-scp -i ~/.ssh/alphaCheckers.pem `
-    ec2-user@<PUBLIC_IP>:~/alphacheckers2/runs/medium/checkpoints/checkpoint_best.pt `
-    ./runs/medium/checkpoints/checkpoint_best.pt
+# MLflow database
+aws s3 cp s3://your-alphacheckers-bucket/mlflow.db ./mlflow.db
 
-# MLflow database (to view run history locally)
-scp -i ~/.ssh/alphaCheckers.pem `
-    ec2-user@<PUBLIC_IP>:~/alphacheckers2/mlflow.db `
-    ./mlflow.db
+# Best model checkpoint
+New-Item -ItemType Directory -Force runs/medium/checkpoints
+aws s3 cp s3://your-alphacheckers-bucket/runs/medium/checkpoints/checkpoint_best.pt ./runs/medium/checkpoints/checkpoint_best.pt
 ```
 
-View run history locally:
+View run history:
 ```powershell
 mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
 ### Play against the trained model locally
 
-After downloading the checkpoint, start the local server and open the UI in
-your browser — it uses the same server that serves the board interface:
+Start the local server and open the UI:
 
 ```powershell
-# Make sure the checkpoints directory exists
-New-Item -ItemType Directory -Force runs/medium/checkpoints
-
-# Download the best checkpoint (if not already done)
-scp -i ~/.ssh/alphaCheckers.pem `
-    ec2-user@<PUBLIC_IP>:~/alphacheckers2/runs/medium/checkpoints/checkpoint_best.pt `
-    ./runs/medium/checkpoints/checkpoint_best.pt
-
-# Start the local server
+conda activate alphacheckers2
 python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://localhost:8000` in your browser. The checkpoint selector in the
-UI lists all `.pt` files it finds under `runs/*/checkpoints/`. Select the one
-you downloaded and start a game.
+Open `http://localhost:8000`, switch Opponent to AI, select the downloaded
+checkpoint from the panel, and start a game.
+
+### Resume from S3 on a new instance
+
+If training was interrupted and you want to resume on a fresh instance:
+
+```bash
+# On the new instance, after cloning + pip install:
+aws s3 cp s3://your-alphacheckers-bucket/runs/medium/checkpoints/checkpoint_best.pt \
+    runs/medium/checkpoints/checkpoint_best.pt
+./train.sh --config medium --workers 12 --resume --experiment baseline \
+    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
+```
 
 ### Clean up
 
-**Stop** (pauses compute billing, ~$0.13/month disk fee continues):
-EC2 Console → Instances → Instance State → Stop
-
-**Terminate** (deletes everything, zero ongoing cost):
-EC2 Console → Instances → Instance State → Terminate
-
-Always terminate after downloading your checkpoint unless you plan to resume
-on the same instance soon.
+Spot instances terminate automatically on shutdown — no manual cleanup needed.
+S3 storage costs ~$0.023/GB/month; a checkpoint_best.pt is ~1 GB → ~$0.02/month.
 
 ## Cost Reference
 
@@ -242,24 +255,24 @@ threshold. Emails you before any unexpected spend accumulates.
 ## Training Config Reference
 
 ```bash
-# Standard medium run on c5.4xlarge (12 = 16 vCPUs - 4 reserved)
+# Standard run — upload to S3 and shut down when done
+./train.sh --config medium --workers 12 --experiment baseline \
+    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
+
+# Without S3 (stay on instance to manually download data)
 ./train.sh --config medium --workers 12 --experiment baseline
 
 # Name a specific hypothesis
-./train.sh --config medium --workers 12 --experiment sims-ablation --run-name 200sims
+./train.sh --config medium --workers 12 --experiment sims-ablation --run-name 200sims \
+    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
 
 # Quick ablation — override sims/iters without editing config
-./train.sh --config medium --workers 12 --sims 400 --iters 50 --experiment sims-ablation
+./train.sh --config medium --workers 12 --sims 400 --iters 50 --experiment sims-ablation \
+    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
 
-# Resume latest checkpoint
-./train.sh --config medium --workers 12 --resume --experiment baseline
-
-# Resume specific checkpoint
-./train.sh --config medium --workers 12 \
-    --resume runs/medium/checkpoints/checkpoint_42.pt
-
-# Auto-shutdown after training
-./train.sh --config medium --workers 12 --experiment baseline && sudo shutdown -h now
+# Resume from S3 checkpoint on a new instance
+./train.sh --config medium --workers 12 --resume --experiment baseline \
+    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
 ```
 
 | Flag | Purpose |
@@ -271,3 +284,4 @@ threshold. Emails you before any unexpected spend accumulates.
 | `--resume` | Resume from latest checkpoint (or pass a path) |
 | `--sims N` | Override MCTS simulations per move for this run |
 | `--iters N` | Override number of training iterations for this run |
+| `--s3-bucket NAME` | Upload checkpoint_best.pt + mlflow.db to S3 after training |
