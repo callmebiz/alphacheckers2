@@ -64,3 +64,4 @@ mlruns/
 mlflow.db
 spot.json
 bdm.json
+ec2_manager.log

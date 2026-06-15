@@ -37,6 +37,8 @@ _s3_upload() {
   aws s3 cp mlflow.db "s3://${S3_BUCKET}/mlflow.db" || true
   aws s3 sync runs/ "s3://${S3_BUCKET}/runs/" \
     --exclude "*" \
+    --include "*/checkpoints/checkpoint_latest.pt" \
+    --include "*/checkpoints/checkpoint_latest.json" \
     --include "*/checkpoints/checkpoint_best.pt" \
     --include "*/checkpoints/checkpoint_best.json" || true
   echo "--- Upload complete ---"

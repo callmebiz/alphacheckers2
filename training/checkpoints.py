@@ -143,22 +143,40 @@ def load(
 
 def save_best(src_path: str, checkpoint_dir: str) -> str:
     """
-    Copy *src_path* to checkpoint_best.pt in the same directory.
+    Copy *src_path* to checkpoint_best.pt (+ sidecar .json) in the same directory.
     Returns the path of the best checkpoint file.
     """
     best_path = os.path.join(checkpoint_dir, "checkpoint_best.pt")
     shutil.copy2(src_path, best_path)
+    src_json = src_path.replace(".pt", ".json")
+    if os.path.exists(src_json):
+        shutil.copy2(src_json, best_path.replace(".pt", ".json"))
     return best_path
+
+
+def save_latest(src_path: str, checkpoint_dir: str) -> str:
+    """
+    Copy *src_path* to checkpoint_latest.pt (+ sidecar .json) in the same directory.
+    Returns the path of the latest checkpoint file.
+    """
+    latest_path = os.path.join(checkpoint_dir, "checkpoint_latest.pt")
+    shutil.copy2(src_path, latest_path)
+    src_json = src_path.replace(".pt", ".json")
+    if os.path.exists(src_json):
+        shutil.copy2(src_json, latest_path.replace(".pt", ".json"))
+    return latest_path
 
 
 def prune_old_checkpoints(checkpoint_dir: str, keep: int = 3) -> None:
     """
     Delete numbered checkpoints beyond the most recent *keep*, preserving
-    checkpoint_best.pt. Prevents disk exhaustion on long runs.
+    checkpoint_best.pt and checkpoint_latest.pt. Prevents disk exhaustion on long runs.
     """
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files = sorted(
-        [f for f in glob.glob(pattern) if not f.endswith("checkpoint_best.pt")],
+        [f for f in glob.glob(pattern)
+         if not f.endswith("checkpoint_best.pt")
+         and not f.endswith("checkpoint_latest.pt")],
         key=lambda p: int(
             os.path.basename(p).replace("checkpoint_", "").replace(".pt", "") or -1
         ),

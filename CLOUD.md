@@ -13,11 +13,33 @@ parallelising games across many CPU cores rather than from GPU acceleration.
 | Kaggle (T4 GPU, free) | Free | 9 hours | Low |
 
 **Recommended: AWS EC2 Spot** — cheapest per run, no session limits, spot
-interruptions are safe because training checkpoints every iteration.
+interruptions are handled gracefully (see below).
 
 > **Why S3?** Spot instances **terminate** (not stop) on shutdown — the EBS
-> disk is deleted. S3 is the only way to preserve data across runs. `train.sh`
-> uploads `checkpoint_best.pt` and `mlflow.db` to S3 before shutdown.
+> disk is deleted. S3 is the only way to preserve data across runs.
+> `train.sh` uploads `checkpoint_best.pt` to S3 after **every promotion** and
+> uploads both `checkpoint_best.pt` + `mlflow.db` at end of training.
+> A SIGTERM trap in `train.sh` also triggers an emergency upload if the spot
+> instance is interrupted mid-run.
+
+---
+
+## Shell syntax note
+
+AWS CLI commands work the same in PowerShell, cmd, and bash. The differences
+are only in variable assignment and JSON file creation:
+
+| Task | PowerShell | cmd.exe | bash (Linux) |
+|---|---|---|---|
+| Set variable | `$VAR = cmd` | *(use PowerShell)* | `VAR=$(cmd)` |
+| Create JSON file | `[System.IO.File]::WriteAllText(...)` | *(use PowerShell)* | `echo '...' > file.json` |
+| SSH | `ssh -i ~/.ssh/key.pem user@IP` | same | same |
+
+**Always use PowerShell on Windows** (not cmd) for the launch commands.
+If `aws` is not found in PowerShell, open a fresh terminal window or run:
+```powershell
+$env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
+```
 
 ---
 
@@ -45,8 +67,6 @@ aws configure
 
 ### 2. Import your SSH key
 
-If your `.pem` is already at `~/.ssh/alphaCheckers.pem`:
-
 ```powershell
 ssh-keygen -y -f $HOME\.ssh\alphaCheckers.pem > $HOME\.ssh\alphaCheckers.pub
 aws ec2 import-key-pair --key-name alphaCheckers --public-key-material fileb://$HOME/.ssh/alphaCheckers.pub --region us-east-1
@@ -61,7 +81,7 @@ aws s3 mb s3://alphacheckers-biz --region us-east-1
 ### 4. Create the IAM role (lets EC2 write to S3)
 
 ```powershell
-python -c "open('trust.json','w').write('{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}')"
+[System.IO.File]::WriteAllText("$PWD\trust.json", '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}')
 aws iam create-role --role-name AlphaCheckersEC2 --assume-role-policy-document file://trust.json
 aws iam attach-role-policy --role-name AlphaCheckersEC2 --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
 aws iam create-instance-profile --instance-profile-name AlphaCheckersEC2
@@ -70,94 +90,72 @@ aws iam add-role-to-instance-profile --instance-profile-name AlphaCheckersEC2 --
 
 ### 5. Create the security group
 
-Get your VPC ID from any subnet:
-
 ```powershell
-aws ec2 describe-subnets --region us-east-1 --query "Subnets[0].VpcId" --output text
+$VPC = aws ec2 describe-subnets --region us-east-1 --query "Subnets[0].VpcId" --output text
+aws ec2 create-security-group --group-name AlphaCheckersSSH --description "SSH for AlphaCheckers" --vpc-id $VPC --region us-east-1 --query GroupId --output text
 ```
 
-Create the group (replace `vpc-...` with the output above):
-
-```powershell
-aws ec2 create-security-group --group-name AlphaCheckersSSH --description "SSH for AlphaCheckers" --vpc-id vpc-REPLACE --region us-east-1 --query GroupId --output text
-```
-
-Add SSH access from your current IP (get IP first):
+Add SSH access from your current IP:
 
 ```powershell
 curl checkip.amazonaws.com
-aws ec2 authorize-security-group-ingress --group-id sg-REPLACE --protocol tcp --port 22 --cidr YOUR_IP/32 --region us-east-1
+aws ec2 authorize-security-group-ingress --group-id sg-01735e08ceeac8ae0 --protocol tcp --port 22 --cidr YOUR_IP/32 --region us-east-1
 ```
 
 > **If SSH times out on a future run:** your IP likely changed. Get it again
 > with `curl checkip.amazonaws.com` and re-run the authorize command with the
-> new IP. Use `--ip-permissions` to remove the old rule if needed.
+> new IP. `InvalidPermission.Duplicate` means your IP hasn't changed — skip it.
 
 ---
 
 ## Per-Run: Launch an Instance
 
-### 1. Get the latest AMI and a subnet
+### 1. Check your IP hasn't changed
 
 ```powershell
-aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --region us-east-1 --query Parameter.Value --output text
-
-aws ec2 describe-subnets --region us-east-1 --query "Subnets[0].SubnetId" --output text
+curl checkip.amazonaws.com
 ```
 
-If you get `InsufficientInstanceCapacity`, try a different AZ:
-
+If it changed, authorize the new IP (old rule stays, both will work):
 ```powershell
-aws ec2 describe-subnets --region us-east-1 --filters "Name=availabilityZone,Values=us-east-1a" --query "Subnets[0].SubnetId" --output text
+aws ec2 authorize-security-group-ingress --group-id sg-01735e08ceeac8ae0 --protocol tcp --port 22 --cidr NEW_IP/32 --region us-east-1
 ```
 
-### 2. Launch the spot instance
+### 2. Launch — one command (PowerShell)
+
+This creates the required JSON files, looks up the latest AMI and a subnet,
+and launches the instance in one shot:
 
 ```powershell
-python -c "open('spot.json','w').write('{\"MarketType\":\"spot\"}')"
-python -c "open('bdm.json','w').write('[{\"DeviceName\":\"/dev/xvda\",\"Ebs\":{\"VolumeSize\":20,\"VolumeType\":\"gp3\"}}]')"
-
-aws ec2 run-instances --region us-east-1 `
-  --image-id ami-REPLACE `
-  --instance-type c5.4xlarge `
-  --key-name alphaCheckers `
-  --subnet-id subnet-REPLACE `
-  --security-group-ids sg-01735e08ceeac8ae0 `
-  --iam-instance-profile Name=AlphaCheckersEC2 `
-  --instance-market-options file://spot.json `
-  --block-device-mappings file://bdm.json `
-  --count 1 --query "Instances[0].InstanceId" --output text
+[System.IO.File]::WriteAllText("$PWD\spot.json", '{"MarketType":"spot"}'); [System.IO.File]::WriteAllText("$PWD\bdm.json", '[{"DeviceName":"/dev/xvda","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]'); $AMI = aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --region us-east-1 --query Parameter.Value --output text; $SUBNET = aws ec2 describe-subnets --region us-east-1 --filters "Name=availabilityZone,Values=us-east-1b" --query "Subnets[0].SubnetId" --output text; aws ec2 run-instances --region us-east-1 --image-id $AMI --instance-type c5.4xlarge --key-name alphaCheckers --subnet-id $SUBNET --security-group-ids sg-01735e08ceeac8ae0 --iam-instance-profile Name=AlphaCheckersEC2 --instance-market-options file://spot.json --block-device-mappings file://bdm.json --count 1 --query "Instances[0].InstanceId" --output text
 ```
 
-### 3. Get the public IP
+> **`InsufficientInstanceCapacity`?** Change `us-east-1b` to `us-east-1a`,
+> `us-east-1c`, `us-east-1d`, etc. until one works.
+
+### 3. SSH in
+
+Wait ~30 seconds for the instance to boot:
 
 ```powershell
+# PowerShell / cmd / bash — all the same
 aws ec2 describe-instances --instance-ids i-REPLACE --region us-east-1 --query "Reservations[0].Instances[0].PublicIpAddress" --output text
+ssh -i ~/.ssh/alphaCheckers.pem ec2-user@PUBLIC_IP
 ```
 
-Wait ~30 seconds for the instance to boot, then SSH in:
-
-```powershell
-ssh -i ~/.ssh/alphaCheckers.pem ec2-user@<PUBLIC_IP>
+On Linux/Mac:
+```bash
+ssh -i ~/.ssh/alphaCheckers.pem ec2-user@PUBLIC_IP
 ```
 
 ---
 
 ## Per-Run: Train on the Instance
 
-### Environment setup (fresh instance only)
+### Environment setup (fresh instance — paste as one block)
 
 ```bash
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-bash Miniconda3-latest-Linux-x86_64.sh -b
-~/miniconda3/bin/conda init bash
-source ~/.bashrc
-
-sudo dnf install -y git screen
-git clone https://github.com/callmebiz/alphacheckers2
-cd alphacheckers2
-pip install -r requirements.txt
-chmod +x train.sh
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh -b && ~/miniconda3/bin/conda init bash && source ~/.bashrc && sudo dnf install -y git screen && git clone https://github.com/callmebiz/alphacheckers2 && cd alphacheckers2 && pip install -r requirements.txt && chmod +x train.sh
 ```
 
 ### Start training
@@ -166,14 +164,13 @@ Always inside `screen` so training survives SSH disconnects:
 
 ```bash
 screen -S training
-cd alphacheckers2
 ./train.sh --config medium --workers 12 --experiment baseline --s3-bucket alphacheckers-biz && sudo shutdown -h now
 ```
 
 Detach with `Ctrl+A D` — safe to close the SSH window.
 
 > **Never run `sudo shutdown` without `--s3-bucket`** — spot instances delete
-> their disk on termination.
+> their disk on termination and the training data will be lost.
 
 **screen commands:**
 
@@ -185,22 +182,36 @@ Detach with `Ctrl+A D` — safe to close the SSH window.
 
 ### Monitor training (second SSH window)
 
+SSH in again from a second terminal:
+
 ```bash
-ssh -i ~/.ssh/alphaCheckers.pem ec2-user@<PUBLIC_IP>
-cd alphacheckers2
+# bash / PowerShell / cmd — same command
+ssh -i ~/.ssh/alphaCheckers.pem ec2-user@PUBLIC_IP
+```
+
+Start MLflow in a screen session on the instance:
+
+```bash
 screen -S mlflow
+cd alphacheckers2
 mlflow ui --backend-store-uri sqlite:///mlflow.db --host 0.0.0.0
 # Ctrl+A D to detach
 ```
 
-SSH tunnel on your local machine (keep this terminal open):
+Open an SSH tunnel on your **local** machine (keep this terminal open):
 
 ```powershell
-ssh -i ~/.ssh/alphaCheckers.pem -L 5000:localhost:5000 ec2-user@<PUBLIC_IP> -N
+# PowerShell or cmd
+ssh -i ~/.ssh/alphaCheckers.pem -L 5000:localhost:5000 ec2-user@PUBLIC_IP -N
+```
+
+```bash
+# bash (Linux/Mac)
+ssh -i ~/.ssh/alphaCheckers.pem -L 5000:localhost:5000 ec2-user@PUBLIC_IP -N
 ```
 
 Open `http://localhost:5000`. Each iteration logs:
-- `loss/policy`, `loss/value` — network training
+- `loss/policy`, `loss/value` — network training losses
 - `eval/elo`, `eval/win_rate` — tournament results
 - `system/iter_time_s`, `system/disk_free_gb` — health metrics
 
@@ -208,37 +219,41 @@ Open `http://localhost:5000`. Each iteration logs:
 
 c5.4xlarge has 16 vCPUs. Reserve 4 for the main process:
 
-```
-16 vCPUs − 4 reserved = 12 game workers
-```
-
 ```bash
-python -c "import os; print(os.cpu_count() - 4)"
+python -c "import os; print(os.cpu_count() - 4)"  # → 12
 ```
 
 ### Resume after spot interruption
 
-Spot gives 2 minutes notice. At most one iteration of work is lost.
-On a new instance, after env setup:
+`train.sh` uploads `checkpoint_best.pt` to S3 after every promotion, so at
+most one iteration's worth of games is lost on interruption. On a new instance,
+after env setup:
 
 ```bash
-aws s3 cp s3://alphacheckers-biz/runs/medium/checkpoints/checkpoint_best.pt \
-    runs/medium/checkpoints/checkpoint_best.pt
+mkdir -p runs/medium/checkpoints
+aws s3 cp s3://alphacheckers-biz/runs/medium/checkpoints/checkpoint_best.pt runs/medium/checkpoints/checkpoint_best.pt
 screen -S training
-./train.sh --config medium --workers 12 --resume --experiment baseline \
-    --s3-bucket alphacheckers-biz && sudo shutdown -h now
+./train.sh --config medium --workers 12 --resume --experiment baseline --s3-bucket alphacheckers-biz && sudo shutdown -h now
 ```
+
+If the bucket is empty (no promotion had occurred yet), skip the `aws s3 cp`
+and start fresh without `--resume`.
 
 ---
 
 ## After Training: Download Locally
 
 ```powershell
-# MLflow logs
+# PowerShell
 aws s3 cp s3://alphacheckers-biz/mlflow.db ./mlflow.db
-
-# Best checkpoint
 New-Item -ItemType Directory -Force runs/medium/checkpoints
+aws s3 cp s3://alphacheckers-biz/runs/medium/checkpoints/checkpoint_best.pt ./runs/medium/checkpoints/checkpoint_best.pt
+```
+
+```bash
+# bash (Linux/Mac)
+aws s3 cp s3://alphacheckers-biz/mlflow.db ./mlflow.db
+mkdir -p runs/medium/checkpoints
 aws s3 cp s3://alphacheckers-biz/runs/medium/checkpoints/checkpoint_best.pt ./runs/medium/checkpoints/checkpoint_best.pt
 ```
 
@@ -268,9 +283,15 @@ Open `http://localhost:8000`, select AI opponent, pick the checkpoint.
 | S3 storage | ~$0.023/GB/month |
 
 Medium config (~5 hrs, 12 workers): **~$0.35 per run**.
-S3 cost for checkpoint_best.pt (~1 GB) + mlflow.db: **~$0.02/month**.
+S3 cost for checkpoint_best.pt + mlflow.db: **~$0.02/month**.
 
 Set a billing alert: AWS Console → Billing → Budgets → Create Budget → $5.
+
+**Known resource IDs (us-east-1):**
+- Security group: `sg-01735e08ceeac8ae0`
+- S3 bucket: `alphacheckers-biz`
+- IAM role / instance profile: `AlphaCheckersEC2`
+- Key pair: `alphaCheckers`
 
 ---
 
@@ -302,4 +323,4 @@ Set a billing alert: AWS Console → Billing → Budgets → Create Budget → $
 | `--resume` | Resume from latest checkpoint (or pass a path) |
 | `--sims N` | Override MCTS simulations per move for this run |
 | `--iters N` | Override number of training iterations for this run |
-| `--s3-bucket NAME` | Upload checkpoint_best.pt + mlflow.db to S3 after training |
+| `--s3-bucket NAME` | Upload `checkpoint_best.pt` to S3 after each promotion and `mlflow.db` at end of training; SIGTERM trap does an emergency upload on spot interruption |

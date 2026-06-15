@@ -334,10 +334,12 @@ class Trainer:
                     ckpt_path, self.best_model, self.optimizer, self.scheduler,
                     iteration, self.buffer, self.elo.all_ratings(), config,
                 )
+                latest_path = checkpoints.save_latest(ckpt_path, config.checkpoint_dir)
+                self._upload_to_s3(latest_path, "checkpoint_latest")
                 if promoted:
                     best_path = checkpoints.save_best(ckpt_path, config.checkpoint_dir)
                     tracker.log_model_artifact(ckpt_path, iteration)
-                    self._upload_to_s3(best_path)
+                    self._upload_to_s3(best_path, "checkpoint_best")
                 checkpoints.prune_old_checkpoints(config.checkpoint_dir)
 
                 self._write_status(iteration, policy_loss, value_loss, cur_elo, promoted)
@@ -475,21 +477,25 @@ class Trainer:
 
     # ── S3 upload ─────────────────────────────────────────────────────────────
 
-    def _upload_to_s3(self, local_path: str) -> None:
-        """Upload a single file to S3 under the run's checkpoints prefix."""
+    def _upload_to_s3(self, local_pt: str, dest_stem: str) -> None:
+        """Upload a checkpoint .pt + .json to S3 under dest_stem."""
         if not self._s3_bucket:
             return
         import subprocess
-        dest = (
-            f"s3://{self._s3_bucket}/runs/{self.config.name}"
-            f"/checkpoints/{os.path.basename(local_path)}"
-        )
-        r = subprocess.run(["aws", "s3", "cp", local_path, dest],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            tqdm.write(f"  S3 upload failed: {r.stderr.strip()}")
-        else:
-            tqdm.write(f"  ✓ S3: {dest}")
+        base = f"s3://{self._s3_bucket}/runs/{self.config.name}/checkpoints"
+        failed = False
+        for ext in (".pt", ".json"):
+            local = local_pt.replace(".pt", ext)
+            if not os.path.exists(local):
+                continue
+            dest = f"{base}/{dest_stem}{ext}"
+            r = subprocess.run(["aws", "s3", "cp", local, dest],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                tqdm.write(f"  S3 upload failed ({dest_stem}{ext}): {r.stderr.strip()}")
+                failed = True
+        if not failed:
+            tqdm.write(f"  ✓ S3: {base}/{dest_stem}.pt")
 
     # ── Signal handling ───────────────────────────────────────────────────────
 
