@@ -90,7 +90,7 @@ class Trainer:
     config : RunConfig defining all hyperparameters and paths.
     """
 
-    def __init__(self, config: RunConfig):
+    def __init__(self, config: RunConfig, s3_bucket: str = ""):
         self.config  = config
         self.device  = config.resolve_device()
         self.game    = Checkers()
@@ -147,6 +147,7 @@ class Trainer:
             if n_workers > 1 else None
         )
 
+        self._s3_bucket = s3_bucket
         self._shutdown = False
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -282,6 +283,7 @@ class Trainer:
                     else:
                         self.model.load_state_dict(self.best_model.state_dict())
 
+
                     self.elo.save()
                     cur_elo = self.elo.rating("best")
 
@@ -333,8 +335,9 @@ class Trainer:
                     iteration, self.buffer, self.elo.all_ratings(), config,
                 )
                 if promoted:
-                    checkpoints.save_best(ckpt_path, config.checkpoint_dir)
+                    best_path = checkpoints.save_best(ckpt_path, config.checkpoint_dir)
                     tracker.log_model_artifact(ckpt_path, iteration)
+                    self._upload_to_s3(best_path)
                 checkpoints.prune_old_checkpoints(config.checkpoint_dir)
 
                 self._write_status(iteration, policy_loss, value_loss, cur_elo, promoted)
@@ -470,15 +473,37 @@ class Trainer:
         with open(self.config.status_path, "w") as f:
             json.dump(status, f)
 
+    # ── S3 upload ─────────────────────────────────────────────────────────────
+
+    def _upload_to_s3(self, local_path: str) -> None:
+        """Upload a single file to S3 under the run's checkpoints prefix."""
+        if not self._s3_bucket:
+            return
+        import subprocess
+        dest = (
+            f"s3://{self._s3_bucket}/runs/{self.config.name}"
+            f"/checkpoints/{os.path.basename(local_path)}"
+        )
+        r = subprocess.run(["aws", "s3", "cp", local_path, dest],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            tqdm.write(f"  S3 upload failed: {r.stderr.strip()}")
+        else:
+            tqdm.write(f"  ✓ S3: {dest}")
+
     # ── Signal handling ───────────────────────────────────────────────────────
 
-    def _handle_signal(self, *_) -> None:
+    def _handle_signal(self, signum, *_) -> None:
         """
-        First Ctrl+C: set flag — loop stops after the current game finishes.
-        Second Ctrl+C: force-quit immediately (no checkpoint written for this iteration).
+        SIGINT (Ctrl+C) or SIGTERM (spot termination): stop after the current
+        game so a clean checkpoint is written before exit.
+        Second signal: force-quit immediately.
         """
         if self._shutdown:
             tqdm.write("\nForce quit.")
             os._exit(1)
-        tqdm.write("\nCtrl+C — stopping after current game. (Ctrl+C again to force quit.)")
+        if signum == signal.SIGTERM:
+            tqdm.write("\nSpot termination notice — stopping after current game.")
+        else:
+            tqdm.write("\nCtrl+C — stopping after current game. (Ctrl+C again to force quit.)")
         self._shutdown = True

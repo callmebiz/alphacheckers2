@@ -81,6 +81,10 @@ def parse_args() -> argparse.Namespace:
         "--iters", type=int, default=None,
         help="Override number of training iterations (default: from config)",
     )
+    p.add_argument(
+        "--s3-bucket", default=None, dest="s3_bucket",
+        help="S3 bucket name — upload checkpoint_best.pt after each promotion",
+    )
     return p.parse_args()
 
 
@@ -129,7 +133,7 @@ def main() -> None:
         resume_path = args.resume
         print(f"Resuming from: {resume_path}")
 
-    trainer = Trainer(config)
+    trainer = Trainer(config, s3_bucket=args.s3_bucket or "")
     trainer.train(resume_from=resume_path)
 
 

@@ -238,7 +238,11 @@ class MCTS:
         _expand(root, policy, valid, self.game)
         self._add_dirichlet_noise(root)
 
-        for _ in range(self.num_simulations):
+        # Forced move: only one legal action — skip all but 1 simulation.
+        # The single sim propagates a real value back to root so root_value()
+        # still works for resign detection.
+        n_sims = 1 if len(root.children) == 1 else self.num_simulations
+        for _ in range(n_sims):
             # ── Step 1: SELECT ───────────────────────────────────────────
             leaf, path = self._select(root)
 
