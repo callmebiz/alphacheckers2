@@ -15,73 +15,144 @@ parallelising games across many CPU cores rather than from GPU acceleration.
 **Recommended: AWS EC2 Spot** — cheapest per run, no session limits, spot
 interruptions are safe because training checkpoints every iteration.
 
-## AWS One-Time Setup
+> **Why S3?** Spot instances **terminate** (not stop) on shutdown — the EBS
+> disk is deleted. S3 is the only way to preserve data across runs. `train.sh`
+> uploads `checkpoint_best.pt` and `mlflow.db` to S3 before shutdown.
 
-### 1. S3 bucket for training output
+---
 
-Spot instances **terminate** (not stop) when shut down — the EBS disk is deleted.
-S3 is the only way to preserve data across runs. Create a bucket once:
+## One-Time Setup (CLI)
 
-```bash
-aws s3 mb s3://your-alphacheckers-bucket --region us-east-1
-```
+Everything below only needs to be done once per AWS account.
 
-Pick any globally unique name (e.g. `alphacheckers-biz`). Then when you launch
-your EC2 instance, attach an IAM role with S3 write access:
-
-EC2 Launch Wizard → **Advanced details → IAM instance profile → Create new IAM role**:
-- Trusted entity: EC2
-- Permissions policy: `AmazonS3FullAccess` (or a scoped policy for just your bucket)
-
-With `--s3-bucket` set, `train.sh` uploads `checkpoint_best.pt` and `mlflow.db`
-to S3 automatically before the instance shuts down.
-
-### 2. SSH key (Windows)
-
-Download your `.pem` file from the EC2 key pair page. Move it into your SSH
-folder and set permissions:
+### 1. Install and configure AWS CLI
 
 ```powershell
-Move-Item ~/Downloads/alphaCheckers.pem $HOME\alphacheckers_temp.pem
-New-Item -ItemType Directory -Path "$HOME\.ssh" -Force
-Move-Item "$HOME\alphacheckers_temp.pem" "$HOME\.ssh\alphaCheckers.pem"
-icacls "$HOME\.ssh\alphaCheckers.pem" /inheritance:r /grant:r "${env:USERNAME}:(R)"
+winget install Amazon.AWSCLI
 ```
 
-> **Note:** Do not use `mv key.pem ~/.ssh/` if `~/.ssh/` does not already exist —
-> PowerShell will rename the file to `.ssh` rather than moving it into a folder.
+Close and reopen the terminal, then configure with your IAM access key
+(IAM → Users → your user → Security credentials → Create access key →
+select "CLI" use case):
 
-### 2. Launch an EC2 instance
+```powershell
+aws configure
+# Access Key ID:     <paste>
+# Secret Access Key: <paste>
+# Default region:    us-east-1
+# Output format:     json
+```
 
-| Setting | Value |
-|---|---|
-| AMI | Amazon Linux 2023 |
-| Instance type | `c5.4xlarge` (16 vCPU, 32 GB RAM) |
-| Key pair | Your downloaded `.pem` |
-| SSH source | My IP only |
-| Storage | 20 GiB gp3 |
-| Purchasing option | Spot instances (Advanced details) |
+### 2. Import your SSH key
 
-## Per-Run Workflow
+If your `.pem` is already at `~/.ssh/alphaCheckers.pem`:
 
-### Connect
+```powershell
+ssh-keygen -y -f $HOME\.ssh\alphaCheckers.pem > $HOME\.ssh\alphaCheckers.pub
+aws ec2 import-key-pair --key-name alphaCheckers --public-key-material fileb://$HOME/.ssh/alphaCheckers.pub --region us-east-1
+```
+
+### 3. Create the S3 bucket
+
+```powershell
+aws s3 mb s3://alphacheckers-biz --region us-east-1
+```
+
+### 4. Create the IAM role (lets EC2 write to S3)
+
+```powershell
+python -c "open('trust.json','w').write('{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}')"
+aws iam create-role --role-name AlphaCheckersEC2 --assume-role-policy-document file://trust.json
+aws iam attach-role-policy --role-name AlphaCheckersEC2 --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+aws iam create-instance-profile --instance-profile-name AlphaCheckersEC2
+aws iam add-role-to-instance-profile --instance-profile-name AlphaCheckersEC2 --role-name AlphaCheckersEC2
+```
+
+### 5. Create the security group
+
+Get your VPC ID from any subnet:
+
+```powershell
+aws ec2 describe-subnets --region us-east-1 --query "Subnets[0].VpcId" --output text
+```
+
+Create the group (replace `vpc-...` with the output above):
+
+```powershell
+aws ec2 create-security-group --group-name AlphaCheckersSSH --description "SSH for AlphaCheckers" --vpc-id vpc-REPLACE --region us-east-1 --query GroupId --output text
+```
+
+Add SSH access from your current IP (get IP first):
+
+```powershell
+curl checkip.amazonaws.com
+aws ec2 authorize-security-group-ingress --group-id sg-REPLACE --protocol tcp --port 22 --cidr YOUR_IP/32 --region us-east-1
+```
+
+> **If SSH times out on a future run:** your IP likely changed. Get it again
+> with `curl checkip.amazonaws.com` and re-run the authorize command with the
+> new IP. Use `--ip-permissions` to remove the old rule if needed.
+
+---
+
+## Per-Run: Launch an Instance
+
+### 1. Get the latest AMI and a subnet
+
+```powershell
+aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --region us-east-1 --query Parameter.Value --output text
+
+aws ec2 describe-subnets --region us-east-1 --query "Subnets[0].SubnetId" --output text
+```
+
+If you get `InsufficientInstanceCapacity`, try a different AZ:
+
+```powershell
+aws ec2 describe-subnets --region us-east-1 --filters "Name=availabilityZone,Values=us-east-1a" --query "Subnets[0].SubnetId" --output text
+```
+
+### 2. Launch the spot instance
+
+```powershell
+python -c "open('spot.json','w').write('{\"MarketType\":\"spot\"}')"
+python -c "open('bdm.json','w').write('[{\"DeviceName\":\"/dev/xvda\",\"Ebs\":{\"VolumeSize\":20,\"VolumeType\":\"gp3\"}}]')"
+
+aws ec2 run-instances --region us-east-1 `
+  --image-id ami-REPLACE `
+  --instance-type c5.4xlarge `
+  --key-name alphaCheckers `
+  --subnet-id subnet-REPLACE `
+  --security-group-ids sg-01735e08ceeac8ae0 `
+  --iam-instance-profile Name=AlphaCheckersEC2 `
+  --instance-market-options file://spot.json `
+  --block-device-mappings file://bdm.json `
+  --count 1 --query "Instances[0].InstanceId" --output text
+```
+
+### 3. Get the public IP
+
+```powershell
+aws ec2 describe-instances --instance-ids i-REPLACE --region us-east-1 --query "Reservations[0].Instances[0].PublicIpAddress" --output text
+```
+
+Wait ~30 seconds for the instance to boot, then SSH in:
 
 ```powershell
 ssh -i ~/.ssh/alphaCheckers.pem ec2-user@<PUBLIC_IP>
 ```
 
-Accept the fingerprint prompt on first connection (`yes`).
+---
 
-### Environment setup (first run only)
+## Per-Run: Train on the Instance
+
+### Environment setup (fresh instance only)
 
 ```bash
-# Miniconda
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 bash Miniconda3-latest-Linux-x86_64.sh -b
 ~/miniconda3/bin/conda init bash
 source ~/.bashrc
 
-# Git + repo
 sudo dnf install -y git screen
 git clone https://github.com/callmebiz/alphacheckers2
 cd alphacheckers2
@@ -91,30 +162,18 @@ chmod +x train.sh
 
 ### Start training
 
-Always run inside `screen` so training survives SSH disconnects:
+Always inside `screen` so training survives SSH disconnects:
 
 ```bash
 screen -S training
 cd alphacheckers2
-./train.sh --config medium --workers 12 --experiment baseline --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
+./train.sh --config medium --workers 12 --experiment baseline --s3-bucket alphacheckers-biz && sudo shutdown -h now
 ```
 
-`train.sh` sets `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` automatically. When
-`--s3-bucket` is provided, it uploads `checkpoint_best.pt` and `mlflow.db` to
-S3 after training finishes — before `shutdown` runs. The instance then
-terminates and all data is safe in S3.
+Detach with `Ctrl+A D` — safe to close the SSH window.
 
 > **Never run `sudo shutdown` without `--s3-bucket`** — spot instances delete
 > their disk on termination.
-
-At startup you will see a disk warning if free space is below 5 GB:
-
-```
-WARNING: only 3.2 GB free — checkpoints may fail if disk fills up.
-```
-
-The trainer keeps only the 3 most recent numbered checkpoints and always
-preserves `checkpoint_best.pt`, so disk usage stays bounded.
 
 **screen commands:**
 
@@ -123,156 +182,115 @@ preserves `checkpoint_best.pt`, so disk usage stays bounded.
 | Detach (leave running) | `Ctrl+A` then `D` |
 | List sessions | `screen -ls` |
 | Reattach | `screen -r training` |
-| Kill session | type `exit` inside screen |
 
-### Worker count and thread pinning
-
-PyTorch/NumPy use internal BLAS thread pools. Without pinning, each worker
-spawns its own thread pool — 4 workers × 4 threads each = 16 threads fighting
-over 16 cores, leaving none for the main training loop.
-
-`OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` pins each worker to exactly 1 thread,
-so you can safely run 1 worker per core. `train.sh` handles this automatically.
-
-**Choosing worker count** for c5.4xlarge (16 vCPUs):
-
-```
-16 vCPUs  −  4 reserved for main process  =  12 game workers
-```
-
-The 4 reserved cores handle: neural net backprop, evaluation, MLflow logging,
-and process orchestration. Fewer than 4 reserved starves the training step.
+### Monitor training (second SSH window)
 
 ```bash
-# Quick formula to compute for any instance
-python -c "import os; print(os.cpu_count() - 4)"
-```
-
-### Monitor training
-
-**tqdm progress bars** are visible when attached to the screen session.
-
-**MLflow UI** — live metrics accessible from your local browser via SSH tunnel:
-
-On EC2 (second screen session):
-```bash
-screen -S mlflow
+ssh -i ~/.ssh/alphaCheckers.pem ec2-user@<PUBLIC_IP>
 cd alphacheckers2
+screen -S mlflow
 mlflow ui --backend-store-uri sqlite:///mlflow.db --host 0.0.0.0
 # Ctrl+A D to detach
 ```
 
-On your local machine (keep this terminal open):
+SSH tunnel on your local machine (keep this terminal open):
+
 ```powershell
 ssh -i ~/.ssh/alphaCheckers.pem -L 5000:localhost:5000 ec2-user@<PUBLIC_IP> -N
 ```
 
-Open `http://localhost:5000` in your browser.
+Open `http://localhost:5000`. Each iteration logs:
+- `loss/policy`, `loss/value` — network training
+- `eval/elo`, `eval/win_rate` — tournament results
+- `system/iter_time_s`, `system/disk_free_gb` — health metrics
 
-**MLflow system metrics** — each iteration logs two additional metrics:
-- `system/iter_time_s` — wall-clock seconds for the full iteration
-- `system/disk_free_gb` — remaining disk space at checkpoint time
+### Worker count
 
-These appear under the `system/` group in the MLflow runs table.
+c5.4xlarge has 16 vCPUs. Reserve 4 for the main process:
 
-### Resume after interruption
-
-Spot instances give 2 minutes notice before reclaiming. At most one iteration
-of work is lost. Resume on the same or a new instance:
+```
+16 vCPUs − 4 reserved = 12 game workers
+```
 
 ```bash
-cd alphacheckers2
-./train.sh --config medium --workers 12 --resume --experiment baseline
+python -c "import os; print(os.cpu_count() - 4)"
 ```
 
-`--resume` with no path auto-finds the latest checkpoint. On startup you will
-see a resume banner confirming what was restored:
+### Resume after spot interruption
 
+Spot gives 2 minutes notice. At most one iteration of work is lost.
+On a new instance, after env setup:
+
+```bash
+aws s3 cp s3://alphacheckers-biz/runs/medium/checkpoints/checkpoint_best.pt \
+    runs/medium/checkpoints/checkpoint_best.pt
+screen -S training
+./train.sh --config medium --workers 12 --resume --experiment baseline \
+    --s3-bucket alphacheckers-biz && sudo shutdown -h now
 ```
-Resumed iter 25 | ELO 2020 | buffer 88,000 | disk free 9.3 GB
-```
 
-### Download results from S3
+---
 
-After training completes (instance already terminated), pull the data locally:
+## After Training: Download Locally
 
 ```powershell
-# MLflow database
-aws s3 cp s3://your-alphacheckers-bucket/mlflow.db ./mlflow.db
+# MLflow logs
+aws s3 cp s3://alphacheckers-biz/mlflow.db ./mlflow.db
 
-# Best model checkpoint
+# Best checkpoint
 New-Item -ItemType Directory -Force runs/medium/checkpoints
-aws s3 cp s3://your-alphacheckers-bucket/runs/medium/checkpoints/checkpoint_best.pt ./runs/medium/checkpoints/checkpoint_best.pt
+aws s3 cp s3://alphacheckers-biz/runs/medium/checkpoints/checkpoint_best.pt ./runs/medium/checkpoints/checkpoint_best.pt
 ```
 
-View run history:
-```powershell
-mlflow ui --backend-store-uri sqlite:///mlflow.db
-```
-
-### Play against the trained model locally
-
-Start the local server and open the UI:
+View training history:
 
 ```powershell
 conda activate alphacheckers2
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+Play against the model:
+
+```powershell
 python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://localhost:8000`, switch Opponent to AI, select the downloaded
-checkpoint from the panel, and start a game.
+Open `http://localhost:8000`, select AI opponent, pick the checkpoint.
 
-### Resume from S3 on a new instance
-
-If training was interrupted and you want to resume on a fresh instance:
-
-```bash
-# On the new instance, after cloning + pip install:
-aws s3 cp s3://your-alphacheckers-bucket/runs/medium/checkpoints/checkpoint_best.pt \
-    runs/medium/checkpoints/checkpoint_best.pt
-./train.sh --config medium --workers 12 --resume --experiment baseline \
-    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
-```
-
-### Clean up
-
-Spot instances terminate automatically on shutdown — no manual cleanup needed.
-S3 storage costs ~$0.023/GB/month; a checkpoint_best.pt is ~1 GB → ~$0.02/month.
+---
 
 ## Cost Reference
 
-| c5.4xlarge | Rate |
+| Resource | Rate |
 |---|---|
-| Spot price | ~$0.07/hr |
-| On-demand | $0.68/hr |
-| EBS (20 GB) while stopped | ~$0.05/month |
+| c5.4xlarge spot | ~$0.07/hr |
+| c5.4xlarge on-demand | $0.68/hr |
+| S3 storage | ~$0.023/GB/month |
 
-Medium config (~5 hrs with 12 workers): **~$0.35 total**.
+Medium config (~5 hrs, 12 workers): **~$0.35 per run**.
+S3 cost for checkpoint_best.pt (~1 GB) + mlflow.db: **~$0.02/month**.
 
-Set a billing alert: AWS Console → Billing → Budgets → Create Budget → $5
-threshold. Emails you before any unexpected spend accumulates.
+Set a billing alert: AWS Console → Billing → Budgets → Create Budget → $5.
+
+---
 
 ## Training Config Reference
 
 ```bash
 # Standard run — upload to S3 and shut down when done
 ./train.sh --config medium --workers 12 --experiment baseline \
-    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
-
-# Without S3 (stay on instance to manually download data)
-./train.sh --config medium --workers 12 --experiment baseline
-
-# Name a specific hypothesis
-./train.sh --config medium --workers 12 --experiment sims-ablation --run-name 200sims \
-    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
+    --s3-bucket alphacheckers-biz && sudo shutdown -h now
 
 # Quick ablation — override sims/iters without editing config
-./train.sh --config medium --workers 12 --sims 400 --iters 50 --experiment sims-ablation \
-    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
+./train.sh --config medium --workers 12 --sims 400 --iters 50 \
+    --experiment sims-ablation --s3-bucket alphacheckers-biz && sudo shutdown -h now
 
-# Resume from S3 checkpoint on a new instance
+# Resume from latest checkpoint
 ./train.sh --config medium --workers 12 --resume --experiment baseline \
-    --s3-bucket your-alphacheckers-bucket && sudo shutdown -h now
+    --s3-bucket alphacheckers-biz && sudo shutdown -h now
+
+# Without S3 (stay on instance to download manually)
+./train.sh --config medium --workers 12 --experiment baseline
 ```
 
 | Flag | Purpose |
