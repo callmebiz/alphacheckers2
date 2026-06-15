@@ -48,6 +48,7 @@ import signal
 import time
 import logging
 from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 
 import numpy as np
 import torch
@@ -132,7 +133,12 @@ class Trainer:
         n_workers = config.training.num_workers
         if n_workers == 0:
             n_workers = max(1, (os.cpu_count() or 2) - 1)
-        self._executor = ProcessPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
+        # Use spawn context on all platforms to avoid fork-safety deadlocks
+        # when torch/numpy internal threads hold locks at fork time.
+        self._executor = (
+            ProcessPoolExecutor(max_workers=n_workers, mp_context=get_context("spawn"))
+            if n_workers > 1 else None
+        )
 
         self._shutdown = False
         signal.signal(signal.SIGINT,  self._handle_signal)
