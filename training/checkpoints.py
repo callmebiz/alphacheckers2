@@ -32,9 +32,11 @@ from __future__ import annotations
 
 import dataclasses
 import glob
+import json
 import os
 import random
 import shutil
+import time
 
 import numpy as np
 import torch
@@ -80,6 +82,16 @@ def save(
     }
 
     torch.save(payload, path)
+
+    # Small sidecar so the UI can show metadata without loading the full checkpoint
+    sidecar = path.replace(".pt", ".json")
+    with open(sidecar, "w") as f:
+        json.dump({
+            "iteration": iteration,
+            "elo":       elo_ratings.get("best", 0.0),
+            "buffer":    len(buffer),
+            "saved_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }, f)
 
 
 def load(
@@ -152,10 +164,11 @@ def prune_old_checkpoints(checkpoint_dir: str, keep: int = 3) -> None:
         ),
     )
     for old in files[:-keep]:
-        try:
-            os.remove(old)
-        except OSError:
-            pass
+        for path in (old, old.replace(".pt", ".json")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def find_latest(checkpoint_dir: str) -> str | None:

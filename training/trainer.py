@@ -44,6 +44,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import signal
 import time
 import logging
@@ -72,6 +73,12 @@ from training.analysis import (
 )
 from training.elo import EloTracker
 from training import checkpoints
+
+
+def _warn_low_disk(path: str, min_gb: float = 5.0) -> None:
+    free_gb = shutil.disk_usage(path).free / 1024**3
+    if free_gb < min_gb:
+        print(f"WARNING: only {free_gb:.1f} GB free — checkpoints may fail if disk fills up.")
 
 
 class Trainer:
@@ -154,6 +161,8 @@ class Trainer:
         ----------
         resume_from : Path to a .pt checkpoint file. If None, starts fresh.
         """
+        _warn_low_disk(self.config.checkpoint_dir)
+
         start_iter = 0
         if resume_from:
             start_iter, self.buffer, elo_ratings = checkpoints.load(
@@ -161,7 +170,13 @@ class Trainer:
             )
             self.elo._ratings = elo_ratings
             self.best_model.load_state_dict(self.model.state_dict())
-            print(f"Resumed from {resume_from} at iteration {start_iter}")
+            cur_elo   = elo_ratings.get("best", 0.0)
+            n_buf     = len(self.buffer)
+            free_gb   = shutil.disk_usage(self.config.checkpoint_dir).free / 1024**3
+            print(
+                f"Resumed iter {start_iter} | ELO {cur_elo:.0f} | "
+                f"buffer {n_buf:,} | disk free {free_gb:.1f} GB"
+            )
         else:
             # Fresh run — discard any elo.json left over from a previous run.
             # EloTracker always loads from disk on init, which would carry stale
@@ -327,6 +342,8 @@ class Trainer:
 
                 # Update outer bar — one summary line per iteration
                 elapsed = time.time() - t0
+                free_gb = shutil.disk_usage(config.checkpoint_dir).free / 1024**3
+                tracker.log_system(step=iteration, iter_time_seconds=elapsed, disk_free_gb=free_gb)
                 pf: dict = dict(
                     elo=f"{cur_elo:.0f}",
                     p=f"{policy_loss:.3f}",

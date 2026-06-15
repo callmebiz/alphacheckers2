@@ -67,6 +67,7 @@ sudo dnf install -y git screen
 git clone https://github.com/callmebiz/alphacheckers2
 cd alphacheckers2
 pip install -r requirements.txt
+chmod +x train.sh
 ```
 
 ### Start training
@@ -76,8 +77,24 @@ Always run inside `screen` so training survives SSH disconnects:
 ```bash
 screen -S training
 cd alphacheckers2
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python train.py --config medium --workers 12 --experiment baseline
+./train.sh --config medium --workers 12 --experiment baseline
 ```
+
+`train.sh` sets `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` automatically and
+forwards all args to `train.py`. Auto-shutdown when training completes:
+
+```bash
+./train.sh --config medium --workers 12 --experiment baseline && sudo shutdown -h now
+```
+
+At startup you will see a disk warning if free space is below 5 GB:
+
+```
+WARNING: only 3.2 GB free — checkpoints may fail if disk fills up.
+```
+
+The trainer keeps only the 3 most recent numbered checkpoints and always
+preserves `checkpoint_best.pt`, so disk usage stays bounded.
 
 **screen commands:**
 
@@ -95,7 +112,7 @@ spawns its own thread pool — 4 workers × 4 threads each = 16 threads fighting
 over 16 cores, leaving none for the main training loop.
 
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` pins each worker to exactly 1 thread,
-so you can safely run 1 worker per core.
+so you can safely run 1 worker per core. `train.sh` handles this automatically.
 
 **Choosing worker count** for c5.4xlarge (16 vCPUs):
 
@@ -132,6 +149,12 @@ ssh -i ~/.ssh/alphaCheckers.pem -L 5000:localhost:5000 ec2-user@<PUBLIC_IP> -N
 
 Open `http://localhost:5000` in your browser.
 
+**MLflow system metrics** — each iteration logs two additional metrics:
+- `system/iter_time_s` — wall-clock seconds for the full iteration
+- `system/disk_free_gb` — remaining disk space at checkpoint time
+
+These appear under the `system/` group in the MLflow runs table.
+
 ### Resume after interruption
 
 Spot instances give 2 minutes notice before reclaiming. At most one iteration
@@ -139,11 +162,15 @@ of work is lost. Resume on the same or a new instance:
 
 ```bash
 cd alphacheckers2
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-    python train.py --config medium --workers 12 --resume --experiment baseline
+./train.sh --config medium --workers 12 --resume --experiment baseline
 ```
 
-`--resume` with no path auto-finds the latest checkpoint.
+`--resume` with no path auto-finds the latest checkpoint. On startup you will
+see a resume banner confirming what was restored:
+
+```
+Resumed iter 25 | ELO 2020 | buffer 88,000 | disk free 9.3 GB
+```
 
 ### Download results
 
@@ -151,13 +178,13 @@ From your local PowerShell when training is complete:
 
 ```powershell
 # Best model checkpoint
-scp -i ~/.ssh/alphaCheckers.pem \
-    ec2-user@<PUBLIC_IP>:~/alphacheckers2/runs/medium/checkpoints/best.pt \
-    ./best.pt
+scp -i ~/.ssh/alphaCheckers.pem `
+    ec2-user@<PUBLIC_IP>:~/alphacheckers2/runs/medium/checkpoints/checkpoint_best.pt `
+    ./runs/medium/checkpoints/checkpoint_best.pt
 
 # MLflow database (to view run history locally)
-scp -i ~/.ssh/alphaCheckers.pem \
-    ec2-user@<PUBLIC_IP>:~/alphacheckers2/mlflow.db \
+scp -i ~/.ssh/alphaCheckers.pem `
+    ec2-user@<PUBLIC_IP>:~/alphacheckers2/mlflow.db `
     ./mlflow.db
 ```
 
@@ -165,6 +192,28 @@ View run history locally:
 ```powershell
 mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
+
+### Play against the trained model locally
+
+After downloading the checkpoint, start the local server and open the UI in
+your browser — it uses the same server that serves the board interface:
+
+```powershell
+# Make sure the checkpoints directory exists
+New-Item -ItemType Directory -Force runs/medium/checkpoints
+
+# Download the best checkpoint (if not already done)
+scp -i ~/.ssh/alphaCheckers.pem `
+    ec2-user@<PUBLIC_IP>:~/alphacheckers2/runs/medium/checkpoints/checkpoint_best.pt `
+    ./runs/medium/checkpoints/checkpoint_best.pt
+
+# Start the local server
+python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://localhost:8000` in your browser. The checkpoint selector in the
+UI lists all `.pt` files it finds under `runs/*/checkpoints/`. Select the one
+you downloaded and start a game.
 
 ### Clean up
 
@@ -194,22 +243,23 @@ threshold. Emails you before any unexpected spend accumulates.
 
 ```bash
 # Standard medium run on c5.4xlarge (12 = 16 vCPUs - 4 reserved)
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-    python train.py --config medium --workers 12 --experiment baseline
+./train.sh --config medium --workers 12 --experiment baseline
 
 # Name a specific hypothesis
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-    python train.py --config medium --workers 12 \
-    --experiment sims-ablation --run-name 200sims
+./train.sh --config medium --workers 12 --experiment sims-ablation --run-name 200sims
+
+# Quick ablation — override sims/iters without editing config
+./train.sh --config medium --workers 12 --sims 400 --iters 50 --experiment sims-ablation
 
 # Resume latest checkpoint
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-    python train.py --config medium --workers 12 --resume --experiment baseline
+./train.sh --config medium --workers 12 --resume --experiment baseline
 
 # Resume specific checkpoint
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-    python train.py --config medium --workers 12 \
+./train.sh --config medium --workers 12 \
     --resume runs/medium/checkpoints/checkpoint_42.pt
+
+# Auto-shutdown after training
+./train.sh --config medium --workers 12 --experiment baseline && sudo shutdown -h now
 ```
 
 | Flag | Purpose |
@@ -218,4 +268,6 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 | `--workers N` | Parallel self-play processes; use `cpu_count - 4` on EC2 |
 | `--experiment` | MLflow experiment name (groups related runs) |
 | `--run-name` | Prefix for auto-generated run name |
-| `--resume` | Resume from latest checkpoint |
+| `--resume` | Resume from latest checkpoint (or pass a path) |
+| `--sims N` | Override MCTS simulations per move for this run |
+| `--iters N` | Override number of training iterations for this run |

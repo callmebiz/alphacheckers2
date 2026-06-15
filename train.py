@@ -73,6 +73,14 @@ def parse_args() -> argparse.Namespace:
         "--run-name", default=None, dest="run_name",
         help="MLflow run name override (default: auto-generated from config)",
     )
+    p.add_argument(
+        "--sims", type=int, default=None,
+        help="Override MCTS simulations per move (default: from config)",
+    )
+    p.add_argument(
+        "--iters", type=int, default=None,
+        help="Override number of training iterations (default: from config)",
+    )
     return p.parse_args()
 
 
@@ -99,6 +107,10 @@ def main() -> None:
         config.mlflow_experiment = args.experiment
     if args.run_name:
         config.mlflow_run_name = args.run_name
+    if args.sims is not None:
+        config.mcts.num_simulations = args.sims
+    if args.iters is not None:
+        config.training.num_iterations = args.iters
 
     seed_everything(config.seed)
 

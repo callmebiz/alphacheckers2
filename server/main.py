@@ -348,25 +348,38 @@ async def list_checkpoints():
         if not fname.endswith(".pt"):
             continue
         stem = fname[:-3]  # strip .pt
-        # Parse iteration number from "checkpoint_N" or "best"
         if stem.startswith("checkpoint_"):
             try:
                 iteration = int(stem.split("_")[-1])
             except ValueError:
                 iteration = -1
-        elif stem == "best":
+        elif stem == "checkpoint_best" or stem == "best":
             iteration = -1
         else:
             continue
+
+        # Read sidecar JSON for ELO and buffer size (fast — no .pt load needed)
+        meta: dict = {}
+        sidecar = os.path.join(ckpt_dir, fname.replace(".pt", ".json"))
+        if os.path.exists(sidecar):
+            try:
+                with open(sidecar) as f:
+                    meta = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
         entries.append({
             "id":        stem,
-            "iteration": iteration,
+            "iteration": meta.get("iteration", iteration),
+            "elo":       meta.get("elo", None),
+            "buffer":    meta.get("buffer", None),
+            "saved_at":  meta.get("saved_at", None),
             "filename":  fname,
             "path":      os.path.join(ckpt_dir, fname),
         })
 
     # Sort: "best" first, then by iteration descending
-    entries.sort(key=lambda e: (-1 if e["id"] == "best" else -e["iteration"]))
+    entries.sort(key=lambda e: (0 if e["id"] == "checkpoint_best" else -e["iteration"]))
     return JSONResponse(entries)
 
 

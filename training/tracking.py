@@ -188,6 +188,18 @@ class MLflowTracker:
             "train/buffer_size":  buffer_size,
         }, step=step)
 
+    def log_system(
+        self,
+        step: int,
+        iter_time_seconds: float,
+        disk_free_gb: float,
+    ) -> None:
+        """Log per-iteration system metrics: wall-clock time and available disk."""
+        mlflow.log_metrics({
+            "system/iter_time_s": iter_time_seconds,
+            "system/disk_free_gb": disk_free_gb,
+        }, step=step)
+
     def log_selfplay(
         self,
         step: int,
