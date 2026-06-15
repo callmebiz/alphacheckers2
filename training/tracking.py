@@ -102,11 +102,13 @@ class MLflowTracker:
         device:     torch.device,
         experiment: str | None = None,
         run_name:   str | None = None,
+        run_id:     str | None = None,
     ):
         self.config    = config
         self.device    = device
         self._experiment = experiment or config.name
         self._run_name_override = run_name
+        self._resume_run_id = run_id or ""
         self._active_run = None
         self._run_name   = ""
 
@@ -120,8 +122,23 @@ class MLflowTracker:
         """The run name embedded in replay files for cross-referencing."""
         return self._run_name
 
+    @property
+    def run_id(self) -> str:
+        """The active MLflow run ID (empty string before start() is called)."""
+        if self._active_run:
+            return self._active_run.info.run_id
+        return ""
+
     def start(self) -> None:
         """Open an MLflow run and log all static params and tags."""
+        if self._resume_run_id:
+            try:
+                self._active_run = mlflow.start_run(run_id=self._resume_run_id)
+                self._run_name = self._active_run.info.run_name or self._resume_run_id
+                return
+            except Exception:
+                pass  # run_id not in this db (stale db) — fall through to new run
+
         name = _auto_run_name(self.config, prefix=self._run_name_override)
         self._active_run = mlflow.start_run(run_name=name)
         try:

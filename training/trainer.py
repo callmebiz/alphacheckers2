@@ -90,7 +90,7 @@ class Trainer:
     config : RunConfig defining all hyperparameters and paths.
     """
 
-    def __init__(self, config: RunConfig, s3_bucket: str = ""):
+    def __init__(self, config: RunConfig, s3_bucket: str = "", mlflow_run_id: str = ""):
         self.config  = config
         self.device  = config.resolve_device()
         self.game    = Checkers()
@@ -125,6 +125,8 @@ class Trainer:
 
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(config.replay_dir,     exist_ok=True)
+
+        self._mlflow_run_id = mlflow_run_id
 
         elo_path  = os.path.join(config.run_dir, config.name, "elo.json")
         self.elo  = EloTracker(elo_path, k=config.eval.elo_k)
@@ -204,6 +206,7 @@ class Trainer:
             config, self.device,
             experiment=config.mlflow_experiment or None,
             run_name=config.mlflow_run_name or None,
+            run_id=self._mlflow_run_id or None,
         ) as tracker:
             for iteration in outer:
                 if self._shutdown:
@@ -333,6 +336,7 @@ class Trainer:
                 checkpoints.save(
                     ckpt_path, self.best_model, self.optimizer, self.scheduler,
                     iteration, self.buffer, self.elo.all_ratings(), config,
+                    mlflow_run_id=tracker.run_id,
                 )
                 latest_path = checkpoints.save_latest(ckpt_path, config.checkpoint_dir)
                 self._upload_to_s3(latest_path, "checkpoint_latest")

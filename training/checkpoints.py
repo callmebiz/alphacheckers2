@@ -54,6 +54,7 @@ def save(
     buffer: ReplayBuffer,
     elo_ratings: dict[str, float],
     config: RunConfig,
+    mlflow_run_id: str = "",
 ) -> None:
     """
     Write a full training checkpoint to *path*.
@@ -87,10 +88,11 @@ def save(
     sidecar = path.replace(".pt", ".json")
     with open(sidecar, "w") as f:
         json.dump({
-            "iteration": iteration,
-            "elo":       elo_ratings.get("best", 0.0),
-            "buffer":    len(buffer),
-            "saved_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "iteration":     iteration,
+            "elo":           elo_ratings.get("best", 0.0),
+            "buffer":        len(buffer),
+            "saved_at":      time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "mlflow_run_id": mlflow_run_id,
         }, f)
 
 
