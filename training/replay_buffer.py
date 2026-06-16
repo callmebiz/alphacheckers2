@@ -24,10 +24,22 @@ gradually pushed out as the agent improves.
 Pre-allocated mode
 ------------------
 When state_shape and policy_size are provided at construction, the buffer
-stores all data in three contiguous numpy arrays of shape:
-  states   (capacity, *state_shape)   float32
-  policies (capacity, policy_size)    float32
+stores all data in three contiguous numpy arrays:
+  states   (capacity, *state_shape)   uint8   — scaled to [0, 255]
+  policies (capacity, policy_size)    float16
   values   (capacity,)                float32
+
+States are encoded as uint8 (values multiplied by 255 on store, divided
+by 255 on load). The 16 binary board-plane channels are exact (0/255=0,
+255/255=1). The 3 scalar channels (rep ratio, no-progress, colour) incur
+<0.004 quantisation error — imperceptible to training. This gives a 4x
+memory reduction over float32 with zero training-quality impact.
+
+Policies are stored as float16. MCTS visit probabilities only need ~3
+significant figures; float16 provides that. 2x memory reduction.
+
+Combined saving vs float32: states ~970 MB -> ~243 MB, policies ~136 MB
+-> ~68 MB for a 200k-example medium buffer.
 
 Sampling then reduces to a single numpy fancy-index slice per array rather
 than a Python list comprehension + torch.stack, which is measurably faster
@@ -81,8 +93,8 @@ class ReplayBuffer:
         self._preallocated = state_shape is not None and policy_size is not None
 
         if self._preallocated:
-            self._states   = np.empty((capacity, *state_shape),  dtype=np.float32)
-            self._policies = np.empty((capacity, policy_size),   dtype=np.float32)
+            self._states   = np.empty((capacity, *state_shape),  dtype=np.uint8)
+            self._policies = np.empty((capacity, policy_size),   dtype=np.float16)
             self._values   = np.empty(capacity,                  dtype=np.float32)
         else:
             # Legacy list mode — used when shape info is not available
@@ -103,8 +115,10 @@ class ReplayBuffer:
         value  : Game outcome from the current player's perspective (+1/0/-1).
         """
         if self._preallocated:
-            self._states[self._pos]   = state.numpy()
-            self._policies[self._pos] = policy
+            # Scale float32 [0,1] -> uint8 [0,255]. Binary channels are exact;
+            # scalar channels incur <0.004 quantisation error.
+            self._states[self._pos]   = (state.numpy() * 255).round().astype(np.uint8)
+            self._policies[self._pos] = policy.astype(np.float16)
             self._values[self._pos]   = value
             if self._len < self.capacity:
                 self._len += 1
@@ -141,9 +155,14 @@ class ReplayBuffer:
         if self._preallocated:
             indices  = np.random.choice(n, batch_size, replace=False)
             # Fancy-index into contiguous arrays; .copy() ensures torch gets
-            # writable memory (required for non-contiguous fancy-index results)
-            states   = torch.from_numpy(self._states[indices].copy())
-            policies = torch.from_numpy(self._policies[indices].copy())
+            # writable memory (required for non-contiguous fancy-index results).
+            # Divide states by 255 to recover float32 [0,1].
+            states   = torch.from_numpy(
+                (self._states[indices].copy().astype(np.float32)) / 255.0
+            )
+            policies = torch.from_numpy(
+                self._policies[indices].copy().astype(np.float32)
+            )
             values   = torch.from_numpy(self._values[indices, np.newaxis].copy())
             return states, policies, values
 
@@ -165,6 +184,7 @@ class ReplayBuffer:
 
         Always emits data as a list of arrays (regardless of storage mode) so
         the format is compatible with both pre-allocated and legacy buffers.
+        States are saved as uint8; policies as float16.
         """
         n = len(self)
         if self._preallocated:
@@ -199,7 +219,12 @@ class ReplayBuffer:
 
     @classmethod
     def from_state_dict(cls, d: dict) -> "ReplayBuffer":
-        """Restore a buffer from a checkpoint dict."""
+        """
+        Restore a buffer from a checkpoint dict.
+
+        Handles both old checkpoints (float32 states/policies) and new ones
+        (uint8 states, float16 policies) so existing training runs resume cleanly.
+        """
         state_shape = d.get("state_shape")
         policy_size = d.get("policy_size")
         buf = cls(d["capacity"], state_shape=state_shape, policy_size=policy_size)
@@ -211,8 +236,13 @@ class ReplayBuffer:
 
         if buf._preallocated:
             for i in range(n):
-                buf._states[i]   = np.asarray(states_list[i],   dtype=np.float32)
-                buf._policies[i] = np.asarray(policies_list[i], dtype=np.float32)
+                state_arr = np.asarray(states_list[i])
+                if state_arr.dtype == np.uint8:
+                    buf._states[i] = state_arr
+                else:
+                    # Old float32 checkpoint: scale to uint8
+                    buf._states[i] = (state_arr * 255).round().astype(np.uint8)
+                buf._policies[i] = np.asarray(policies_list[i], dtype=np.float16)
                 buf._values[i]   = float(values_list[i])
             buf._len = n
             # Saved data is in chronological order; write pointer wraps naturally

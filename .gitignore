@@ -67,3 +67,4 @@ bdm.json
 ec2_manager.py
 ec2_manager.log
 test_mlflow_persistence.py
+CLOUD.md
