@@ -169,7 +169,7 @@ def save_latest(src_path: str, checkpoint_dir: str) -> str:
     return latest_path
 
 
-def prune_old_checkpoints(checkpoint_dir: str, keep: int = 3) -> None:
+def prune_old_checkpoints(checkpoint_dir: str, keep: int = 1) -> None:
     """
     Delete numbered checkpoints beyond the most recent *keep*, preserving
     checkpoint_best.pt and checkpoint_latest.pt. Prevents disk exhaustion on long runs.
