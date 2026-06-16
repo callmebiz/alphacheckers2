@@ -177,8 +177,7 @@ def prune_old_checkpoints(checkpoint_dir: str, keep: int = 1) -> None:
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files = sorted(
         [f for f in glob.glob(pattern)
-         if not f.endswith("checkpoint_best.pt")
-         and not f.endswith("checkpoint_latest.pt")],
+         if os.path.basename(f) not in ("checkpoint_best.pt", "checkpoint_latest.pt")],
         key=lambda p: int(
             os.path.basename(p).replace("checkpoint_", "").replace(".pt", "") or -1
         ),
@@ -201,7 +200,7 @@ def find_latest(checkpoint_dir: str) -> str | None:
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files   = [
         f for f in glob.glob(pattern)
-        if not f.endswith("checkpoint_best.pt")
+        if os.path.basename(f) not in ("checkpoint_best.pt", "checkpoint_latest.pt")
     ]
     if not files:
         return None

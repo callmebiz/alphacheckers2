@@ -219,6 +219,21 @@ class TestMultiJump:
         new_state = game.get_next_state(state, jump["action"], 1)
         assert new_state["jump_again"] is None
 
+    def test_promotion_via_capture_ends_turn(self, game):
+        """
+        American rules: a man crowned via capture may NOT continue jumping.
+        jump_again must be None even when the newly-crowned king could jump.
+        P1 man at (2,1) captures P2 at (1,2) → lands at (0,3): king row.
+        P2 at (1,4) would be reachable by a king at (0,3), but the turn ends.
+        """
+        state = blank_state(game)
+        place(state, {(2, 1): P1_MAN, (1, 2): P2_MAN, (1, 4): P2_MAN})
+        jumps = [m for m in game.list_moves(state, 1) if m["is_jump"] and m["to"][0] == 0]
+        assert jumps, "Expected a jump landing on the king row"
+        new_state = game.get_next_state(state, jumps[0]["action"], 1)
+        assert new_state["board"][0, 3] == P1_KING, "Piece should be crowned"
+        assert new_state["jump_again"] is None, "Turn must end on promotion via capture"
+
 
 # ── Terminal conditions ────────────────────────────────────────────────────────
 

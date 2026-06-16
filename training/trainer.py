@@ -237,10 +237,13 @@ class Trainer:
                 sp_first_actions = [int(np.argmax(e[1])) for e in examples]
 
                 # ── Step 2: Train network ──────────────────────────────────
+                trained = False
                 policy_loss = value_loss = value_mae = 0.0
                 if len(self.buffer) >= tc.min_buffer_size:
                     outer.set_description(f"{config.name} | training")
                     policy_loss, value_loss, value_mae = self._train_epochs()
+                    trained = True
+                    self.scheduler.step()
 
                 if self._shutdown:
                     break
@@ -300,13 +303,14 @@ class Trainer:
                 outer.set_description(f"{config.name} | logging")
                 lr = self.optimizer.param_groups[0]["lr"]
 
-                tracker.log_training(
-                    step=iteration,
-                    policy_loss=policy_loss,
-                    value_loss=value_loss,
-                    lr=lr,
-                    buffer_size=len(self.buffer),
-                )
+                if trained:
+                    tracker.log_training(
+                        step=iteration,
+                        policy_loss=policy_loss,
+                        value_loss=value_loss,
+                        lr=lr,
+                        buffer_size=len(self.buffer),
+                    )
                 tracker.log_selfplay(
                     step=iteration,
                     avg_game_length=sp_stats.avg_game_length,
@@ -347,7 +351,6 @@ class Trainer:
                 checkpoints.prune_old_checkpoints(config.checkpoint_dir, keep=1)
 
                 self._write_status(iteration, policy_loss, value_loss, cur_elo, promoted)
-                self.scheduler.step()
 
                 # Update outer bar — one summary line per iteration
                 elapsed = time.time() - t0

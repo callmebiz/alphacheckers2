@@ -160,6 +160,9 @@ class Checkers:
             if (player == 1 and tr == 0) or (player == -1 and tr == self.row_count - 1):
                 board[tr, tc] *= 2
                 promotion_made = True
+                # American rules: crowning via capture ends the turn immediately.
+                # The newly-crowned king may not continue jumping in the same move.
+                new_jump_again = None
 
         no_progress = 0 if (capture_made or promotion_made) else state["no_progress"] + 1
 

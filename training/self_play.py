@@ -284,7 +284,7 @@ def play_game(
 
         if state["jump_again"] is None:
             player = game.get_opponent(player)
-        move_number += 1
+            move_number += 1
 
     # `player` is the terminal player: the one who resigned, couldn't move, or
     # whose turn it is at the end.  `outcome` is from that player's perspective.

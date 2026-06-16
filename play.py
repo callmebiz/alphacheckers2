@@ -1,10 +1,10 @@
 """Launch the checkers UI server. Open http://localhost:8000 to play."""
-import subprocess, sys, webbrowser, time
+import os, subprocess, sys, webbrowser, time
 
 def main():
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000"],
-        cwd=__file__.replace("play.py", ""),
+        cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
     )
     time.sleep(1.2)
     webbrowser.open("http://localhost:8000")

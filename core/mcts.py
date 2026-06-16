@@ -337,7 +337,13 @@ class MCTS:
         valid  : np.ndarray (action_size,) bool — legal-move mask (reused by
                  _expand to avoid a redundant get_valid_moves call).
         """
-        cache_key = (node.state['board'].tobytes(), node.player)
+        board_bytes = node.state['board'].tobytes()
+        cache_key = (
+            board_bytes,
+            node.player,
+            node.state['no_progress'],
+            node.state['repetitions'].get(board_bytes, 0),
+        )
         if cache_key in self._eval_cache:
             self._eval_cache.move_to_end(cache_key)
             return self._eval_cache[cache_key]
