@@ -128,6 +128,7 @@ class EvalConfig:
     promotion_threshold: float = 0.55
     elo_k:               float = 32.0
     eval_every_n_iters:  int   = 1
+    eval_noise_eps:      float = 0.1   # small Dirichlet noise during eval so games diverge
 
 
 # ── Top-level run config ──────────────────────────────────────────────────────

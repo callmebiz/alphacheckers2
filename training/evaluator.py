@@ -118,8 +118,9 @@ def _eval_worker(args: tuple):
     mc         = config.mcts
     device     = torch.device("cpu")
 
-    mcts_c = _make_mcts(challenger, game, encoder, mc, device, noise=False)
-    mcts_m = _make_mcts(champion,   game, encoder, mc, device, noise=False)
+    eps    = config.eval.eval_noise_eps
+    mcts_c = _make_mcts(challenger, game, encoder, mc, device, noise=False, eval_noise_eps=eps)
+    mcts_m = _make_mcts(champion,   game, encoder, mc, device, noise=False, eval_noise_eps=eps)
 
     challenger_is_p1 = (game_idx % 2 == 0)
     p1_mcts, p2_mcts = (mcts_c, mcts_m) if challenger_is_p1 else (mcts_m, mcts_c)
@@ -182,8 +183,9 @@ def run_tournament(
     os.makedirs(config.replay_dir, exist_ok=True)
 
     # Build two MCTS instances — one per model, noise disabled for eval
-    mcts_challenger = _make_mcts(challenger, game, encoder, mc, device, noise=False)
-    mcts_champion   = _make_mcts(champion,   game, encoder, mc, device, noise=False)
+    eps = config.eval.eval_noise_eps
+    mcts_challenger = _make_mcts(challenger, game, encoder, mc, device, noise=False, eval_noise_eps=eps)
+    mcts_champion   = _make_mcts(champion,   game, encoder, mc, device, noise=False, eval_noise_eps=eps)
 
     wins = draws = losses = 0
     records: list[GameRecord] = []
@@ -388,13 +390,14 @@ def _make_mcts(
     mc,
     device: torch.device,
     noise: bool,
+    eval_noise_eps: float = 0.0,
 ) -> MCTS:
     """Construct an MCTS instance with optional Dirichlet noise."""
     return MCTS(
         game, encoder, model,
         num_simulations=mc.num_simulations,
         c_puct=mc.c_puct,
-        dirichlet_eps=mc.dirichlet_eps if noise else 0.0,
+        dirichlet_eps=mc.dirichlet_eps if noise else eval_noise_eps,
         dirichlet_alpha=mc.dirichlet_alpha,
         device=device,
     )
