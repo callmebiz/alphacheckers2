@@ -224,9 +224,9 @@ MEDIUM = RunConfig(
     mcts=MCTSConfig(num_simulations=200, temperature_init=1.0, temperature_final=0.0, temp_drop_move=30,
                     dirichlet_alpha=0.6),
     training=TrainingConfig(
-        num_iterations=150, num_self_play_games=50, num_epochs=4,
+        num_iterations=300, num_self_play_games=50, num_epochs=4,
         batch_size=256, replay_buffer_size=200_000, min_buffer_size=1_000,
-        lr_milestones=[80, 120, 140],
+        lr_milestones=[160, 240, 280],
         num_workers=1,
         value_mix=0.5,
     ),
