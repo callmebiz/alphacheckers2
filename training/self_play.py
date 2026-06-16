@@ -222,7 +222,7 @@ def play_game(
     state           = game.get_initial_state()
     player          = 1
     move_number     = 0
-    recorded: list[tuple[torch.Tensor, np.ndarray, int, float]] = []  # (enc, policy, player, mcts_q)
+    recorded: list[tuple[torch.Tensor, np.ndarray, int]] = []  # (enc, policy, player)
     replay_moves: list[dict] = []
     move_entropies:  list[float] = []
     move_top1_probs: list[float] = []
@@ -260,7 +260,7 @@ def play_game(
         # Sample the actual move from the training distribution
         action = int(np.random.choice(game.action_size, p=train_prob))
 
-        recorded.append((encoded, train_prob, player, root_q))
+        recorded.append((encoded, train_prob, player))
 
         # Per-move spread stats — flag forced captures (n_legal==1) so the
         # caller can exclude trivially-zero entropies from the min stat.
@@ -290,12 +290,10 @@ def play_game(
     # `player` is the terminal player: the one who resigned, couldn't move, or
     # whose turn it is at the end.  `outcome` is from that player's perspective.
     terminal_player = player
-    vm = config.training.value_mix
 
     examples: list[tuple[torch.Tensor, np.ndarray, float]] = []
-    for enc_state, policy, p, q in recorded:
-        game_val = outcome if p == terminal_player else -outcome
-        val      = game_val if vm == 0.0 else (1.0 - vm) * game_val + vm * q
+    for enc_state, policy, p in recorded:
+        val = outcome if p == terminal_player else -outcome
         examples.append((enc_state, policy, val))
 
     if outcome < 0:

@@ -12,7 +12,7 @@ A checkpoint is a single .pt file containing:
   scheduler_state    — LR schedule position
   iteration          — which iteration we just finished
   replay_buffer      — all accumulated training examples
-  elo_ratings        — current ELO ratings for all checkpoints
+  promotion_count    — cumulative number of successful promotions so far
   config             — the RunConfig dict so the checkpoint is self-describing
   rng_states         — Python, NumPy, and PyTorch RNG states for exact replay
 
@@ -52,7 +52,7 @@ def save(
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     iteration: int,
     buffer: ReplayBuffer,
-    elo_ratings: dict[str, float],
+    promotion_count: int,
     config: RunConfig,
     mlflow_run_id: str = "",
 ) -> None:
@@ -72,7 +72,7 @@ def save(
         "scheduler_state": scheduler.state_dict(),
         "iteration":       iteration,
         "replay_buffer":   buffer.state_dict(),
-        "elo_ratings":     elo_ratings,
+        "promotion_count": promotion_count,
         "config":          dataclasses.asdict(config),
         "rng_states": {
             "python":  random.getstate(),
@@ -92,11 +92,11 @@ def save(
     sidecar = path.replace(".pt", ".json")
     with open(sidecar, "w") as f:
         json.dump({
-            "iteration":     iteration,
-            "elo":           elo_ratings.get("best", 0.0),
-            "buffer":        len(buffer),
-            "saved_at":      time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "mlflow_run_id": mlflow_run_id,
+            "iteration":      iteration,
+            "promotions":     promotion_count,
+            "buffer":         len(buffer),
+            "saved_at":       time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "mlflow_run_id":  mlflow_run_id,
         }, f)
 
 
@@ -106,9 +106,9 @@ def load(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     device: torch.device,
-) -> tuple[int, ReplayBuffer, dict[str, float]]:
+) -> tuple[int, ReplayBuffer, int]:
     """
-    Restore training state from *path* and return (iteration, buffer, elo_ratings).
+    Restore training state from *path* and return (iteration, buffer, promotion_count).
 
     The model is loaded to CPU first, then moved to *device*. This ensures
     cross-device compatibility regardless of where the checkpoint was created.
@@ -140,11 +140,11 @@ def load(
     if rng.get("cuda") and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(rng["cuda"])
 
-    buffer      = ReplayBuffer.from_state_dict(payload["replay_buffer"])
-    elo_ratings = payload.get("elo_ratings", {})
-    iteration   = payload["iteration"]
+    buffer          = ReplayBuffer.from_state_dict(payload["replay_buffer"])
+    promotion_count = payload.get("promotion_count", 0)
+    iteration       = payload["iteration"]
 
-    return iteration, buffer, elo_ratings
+    return iteration, buffer, promotion_count
 
 
 def _atomic_copy(src: str, dst: str) -> None:

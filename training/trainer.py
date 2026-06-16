@@ -71,7 +71,6 @@ from training.analysis import (
     compute_opening_entropy,
     compute_policy_entropy,
 )
-from training.elo import EloTracker
 from training import checkpoints
 
 
@@ -127,9 +126,7 @@ class Trainer:
         os.makedirs(config.replay_dir,     exist_ok=True)
 
         self._mlflow_run_id = mlflow_run_id
-
-        elo_path  = os.path.join(config.run_dir, config.name, "elo.json")
-        self.elo  = EloTracker(elo_path, k=config.eval.elo_k)
+        self._promotion_count: int = 0
 
         # AMP scaler — only active on CUDA
         self._use_amp  = (self.device.type == "cuda")
@@ -168,23 +165,16 @@ class Trainer:
 
         start_iter = 0
         if resume_from:
-            start_iter, self.buffer, elo_ratings = checkpoints.load(
+            start_iter, self.buffer, self._promotion_count = checkpoints.load(
                 resume_from, self.model, self.optimizer, self.scheduler, self.device
             )
-            self.elo._ratings = elo_ratings
             self.best_model.load_state_dict(self.model.state_dict())
-            cur_elo   = elo_ratings.get("best", 0.0)
-            n_buf     = len(self.buffer)
-            free_gb   = shutil.disk_usage(self.config.checkpoint_dir).free / 1024**3
+            n_buf   = len(self.buffer)
+            free_gb = shutil.disk_usage(self.config.checkpoint_dir).free / 1024**3
             print(
-                f"Resumed iter {start_iter} | ELO {cur_elo:.0f} | "
+                f"Resumed iter {start_iter} | promotions {self._promotion_count} | "
                 f"buffer {n_buf:,} | disk free {free_gb:.1f} GB"
             )
-        else:
-            # Fresh run — discard any elo.json left over from a previous run.
-            # EloTracker always loads from disk on init, which would carry stale
-            # ratings into the new run and produce misleading starting ELO.
-            self.elo._ratings = {}
 
         config = self.config
         tc     = config.training
@@ -251,7 +241,6 @@ class Trainer:
                 # ── Step 3: Evaluate ───────────────────────────────────────
                 promoted = False
                 result   = None
-                cur_elo  = self.elo.rating("best")
 
                 if (iteration + 1) % config.eval.eval_every_n_iters == 0:
                     outer.set_description(f"{config.name} | eval")
@@ -267,37 +256,17 @@ class Trainer:
                     if self._shutdown:
                         break  # discard partial tournament; don't promote on incomplete results
 
-                    # Seed the challenger's ELO at best's current rating so any
-                    # win rate > 50% (which promotion requires) strictly increases
-                    # the "best" ELO on promotion, rather than comparing against
-                    # the always-1000 default for a new key.
-                    self.elo._ratings[f"iter_{iteration}"] = self.elo.rating("best")
-                    self.elo.update_from_results(
-                        f"iter_{iteration}", "best",
-                        result.wins, result.draws, result.losses,
-                    )
-
                     promoted = result.win_rate >= config.eval.promotion_threshold
                     if promoted:
+                        self._promotion_count += 1
                         self.best_model.load_state_dict(self.model.state_dict())
                         self.best_model.eval()
-                        # The old "best" just took the tournament loss — its ELO
-                        # went down.  Transfer the *winner's* (challenger's) ELO
-                        # to the "best" slot so the displayed rating tracks the
-                        # actual strength of the current champion.
-                        self.elo._ratings["best"] = self.elo.rating(f"iter_{iteration}")
-                    else:
-                        self.model.load_state_dict(self.best_model.state_dict())
-
-
-                    self.elo.save()
-                    cur_elo = self.elo.rating("best")
-
-                    if promoted:
                         tqdm.write(
                             f"  ✓ iter {iteration+1}: promoted "
-                            f"(win rate {result.win_rate:.0%}, ELO {cur_elo:.0f})"
+                            f"(win rate {result.win_rate:.0%}, #{self._promotion_count})"
                         )
+                    else:
+                        self.model.load_state_dict(self.best_model.state_dict())
 
                 # ── Step 4: Log + checkpoint ───────────────────────────────
                 outer.set_description(f"{config.name} | logging")
@@ -326,8 +295,7 @@ class Trainer:
                     tracker.log_evaluation(
                         step=iteration,
                         result=result,
-                        elo=cur_elo,
-                        promoted=promoted,
+                        promotion_count=self._promotion_count,
                         value_mae=value_mae,
                         opening_entropy=compute_opening_entropy(
                             sp_first_actions, self.game.action_size
@@ -339,25 +307,27 @@ class Trainer:
                 )
                 checkpoints.save(
                     ckpt_path, self.best_model, self.optimizer, self.scheduler,
-                    iteration, self.buffer, self.elo.all_ratings(), config,
+                    iteration, self.buffer, self._promotion_count, config,
                     mlflow_run_id=tracker.run_id,
                 )
                 latest_path = checkpoints.save_latest(ckpt_path, config.checkpoint_dir)
                 self._upload_to_s3(latest_path, "checkpoint_latest")
+                self._upload_mlflow_db()
                 if promoted:
                     best_path = checkpoints.save_best(ckpt_path, config.checkpoint_dir)
                     tracker.log_model_artifact(ckpt_path, iteration)
                     self._upload_to_s3(best_path, "checkpoint_best")
+                    self._upload_versioned_best_to_s3(best_path, iteration)
                 checkpoints.prune_old_checkpoints(config.checkpoint_dir, keep=1)
 
-                self._write_status(iteration, policy_loss, value_loss, cur_elo, promoted)
+                self._write_status(iteration, policy_loss, value_loss)
 
                 # Update outer bar — one summary line per iteration
                 elapsed = time.time() - t0
                 free_gb = shutil.disk_usage(config.checkpoint_dir).free / 1024**3
                 tracker.log_system(step=iteration, iter_time_seconds=elapsed, disk_free_gb=free_gb)
                 pf: dict = dict(
-                    elo=f"{cur_elo:.0f}",
+                    promo=str(self._promotion_count),
                     p=f"{policy_loss:.3f}",
                     v=f"{value_loss:.3f}",
                     t=f"{elapsed:.0f}s",
@@ -458,8 +428,6 @@ class Trainer:
         iteration:   int,
         policy_loss: float,
         value_loss:  float,
-        elo:         float,
-        promoted:    bool,
     ) -> None:
         """
         Write a JSON status file that the web UI polls for live training info.
@@ -474,8 +442,7 @@ class Trainer:
             "metrics": {
                 "policy_loss": round(policy_loss, 4),
                 "value_loss":  round(value_loss, 4),
-                "elo":         round(elo, 1),
-                "promoted":    promoted,
+                "promotions":  self._promotion_count,
             },
         }
         os.makedirs(os.path.dirname(self.config.status_path), exist_ok=True)
@@ -503,6 +470,40 @@ class Trainer:
                 failed = True
         if not failed:
             tqdm.write(f"  ✓ S3: {base}/{dest_stem}.pt")
+
+    def _upload_mlflow_db(self) -> None:
+        """Upload mlflow.db to S3 so the next instance can resume the same run."""
+        if not self._s3_bucket:
+            return
+        import subprocess
+        db = self.config.mlflow_uri.replace("sqlite:///", "")
+        if not os.path.exists(db):
+            return
+        dest = f"s3://{self._s3_bucket}/mlflow.db"
+        r = subprocess.run(["aws", "s3", "cp", db, dest],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            tqdm.write(f"  S3 mlflow.db upload failed: {r.stderr.strip()}")
+
+    def _upload_versioned_best_to_s3(self, best_path: str, iteration: int) -> None:
+        """Archive a versioned copy of the best checkpoint so prior bests aren't overwritten."""
+        if not self._s3_bucket:
+            return
+        import subprocess
+        base = f"s3://{self._s3_bucket}/runs/{self.config.name}/checkpoints/versions"
+        stem = f"checkpoint_best_iter{iteration:04d}"
+        failed = False
+        for ext in (".pt", ".json"):
+            local = best_path.replace(".pt", ext)
+            if not os.path.exists(local):
+                continue
+            r = subprocess.run(["aws", "s3", "cp", local, f"{base}/{stem}{ext}"],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                tqdm.write(f"  S3 versioned upload failed ({stem}{ext}): {r.stderr.strip()}")
+                failed = True
+        if not failed:
+            tqdm.write(f"  ✓ S3 versioned: {base}/{stem}.pt")
 
     # ── Signal handling ───────────────────────────────────────────────────────
 

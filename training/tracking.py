@@ -22,11 +22,9 @@ Metrics (logged once per training iteration as a time-series):
   selfplay/draw_rate         — fraction of games that ended in draws
   selfplay/p1_win_rate       — P1 win fraction (should trend toward ~50%)
 
-  eval/elo                   — current best model ELO rating
   eval/win_rate              — challenger win rate in tournament
   eval/win_rate_ci_lo/hi     — 95% Wilson confidence interval bounds
-  eval/tournament_games      — total games played in tournament
-  eval/promoted              — 1 if challenger was promoted, 0 if not
+  eval/promotions            — cumulative count of successful promotions
   eval/avg_game_length       — mean game length in tournament
   eval/draw_rate             — draw fraction in tournament
 
@@ -59,7 +57,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import math
 import os
 import subprocess
 import tempfile
@@ -201,7 +198,6 @@ class MLflowTracker:
             "loss/value":         value_loss,
             "loss/total":         policy_loss + value_loss,
             "train/lr":           lr,
-            "train/log10_lr":     math.log10(lr) if lr > 0 else -9.0,
             "train/buffer_size":  buffer_size,
         }, step=step)
 
@@ -243,19 +239,14 @@ class MLflowTracker:
 
     def log_evaluation(
         self,
-        step:     int,
-        result:   TournamentResult,
-        elo:      float,
-        promoted: bool,
-        value_mae:        float = 0.0,
-        opening_entropy:  float = 0.0,
+        step:            int,
+        result:          TournamentResult,
+        promotion_count: int,
+        value_mae:       float = 0.0,
+        opening_entropy: float = 0.0,
     ) -> None:
         """Log tournament and evaluation metrics for one iteration."""
         lo, hi = result.win_rate_ci
-        # From compute_game_metrics, keep side-based outcome rates (p1/p2/draw)
-        # and game-length / material stats.  Note: p1/p2 here refers to which
-        # SIDE won (first-mover vs second-mover), not which model — distinct
-        # from eval/win_rate which is the challenger's side-adjusted win rate.
         _keep = {
             "p1_win_rate", "p2_win_rate", "draw_rate",
             "game_length_mean", "game_length_std", "avg_pieces_remaining",
@@ -266,11 +257,10 @@ class MLflowTracker:
             if k in _keep
         }
         mlflow.log_metrics({
-            "eval/elo":               elo,
             "eval/win_rate":          result.win_rate,
             "eval/win_rate_ci_lo":    lo,
             "eval/win_rate_ci_hi":    hi,
-            "eval/promoted":          int(promoted),
+            "eval/promotions":        promotion_count,
             "eval/wins":              result.wins,
             "eval/draws":             result.draws,
             "eval/losses":            result.losses,
