@@ -31,7 +31,7 @@ class Checkers:
         buffer_rows: int = 2,
         draw_move_limit: int = 50,
         repetition_limit: int = 3,
-        history_timesteps: int = 4,
+        history_timesteps: int = 1,
     ):
         self.row_count = row_count
         self.col_count = col_count

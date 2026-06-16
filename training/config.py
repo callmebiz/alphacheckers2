@@ -14,7 +14,7 @@ RunConfig
   ├── ModelConfig       — network architecture
   ├── MCTSConfig        — search parameters
   ├── TrainingConfig    — optimiser, batch size, replay buffer
-  └── EvalConfig        — tournament rules, ELO, promotion threshold
+  └── EvalConfig        — tournament rules, promotion threshold
 
 Three ready-made presets are provided at the bottom of this file:
   DEBUG   — completes in minutes on CPU; used for smoke-testing code changes
@@ -115,17 +115,12 @@ class EvalConfig:
         improvement" or higher (e.g. 0.55) to require a statistically
         meaningful gain before promoting.
 
-    elo_k
-        ELO K-factor: how much a single game shifts ratings. Higher K
-        means ratings react faster but are noisier.
-
     eval_every_n_iters
         Run evaluation every N training iterations. Setting this > 1 saves
         time when tournament games are expensive.
     """
     tournament_games:    int   = 40
     promotion_threshold: float = 0.55
-    elo_k:               float = 32.0
     eval_every_n_iters:  int   = 1
     eval_noise_eps:      float = 0.1   # small Dirichlet noise during eval so games diverge
 

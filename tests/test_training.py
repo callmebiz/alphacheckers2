@@ -1,5 +1,5 @@
 """
-Tests for the training stack — replay buffer, ELO tracker, and checkpoints.
+Tests for the training stack — replay buffer and checkpoints.
 
 Run: pytest tests/test_training.py -v
 """
@@ -14,7 +14,6 @@ import torch
 from training.config import DEBUG, RunConfig
 from training.replay_buffer import ReplayBuffer
 from training.self_play import SelfPlayStats
-from training.elo import EloTracker
 from training import checkpoints
 from core.game import Checkers
 from core.encoder import StateEncoder
@@ -152,68 +151,6 @@ class TestReplayBuffer:
         assert "7/100" in repr(buf)
 
 
-# ── EloTracker ────────────────────────────────────────────────────────────────
-
-class TestEloTracker:
-    @pytest.fixture
-    def tracker(self, tmp_path):
-        return EloTracker(str(tmp_path / "elo.json"), k=32.0)
-
-    def test_unseen_player_starts_at_1000(self, tracker):
-        assert tracker.rating("alice") == 1000.0
-
-    def test_win_increases_winner_rating(self, tracker):
-        tracker.update("alice", "bob", score_a=1.0)
-        assert tracker.rating("alice") > 1000.0
-
-    def test_loss_decreases_loser_rating(self, tracker):
-        tracker.update("alice", "bob", score_a=0.0)
-        assert tracker.rating("alice") < 1000.0
-
-    def test_draw_rating_near_unchanged_for_equal_opponents(self, tracker):
-        before_a = tracker.rating("alice")
-        before_b = tracker.rating("bob")
-        tracker.update("alice", "bob", score_a=0.5)
-        # Equal opponents drawing → very small delta
-        assert abs(tracker.rating("alice") - before_a) < 1.0
-        assert abs(tracker.rating("bob")   - before_b) < 1.0
-
-    def test_stronger_player_gains_less_from_win(self, tracker):
-        """A strong player (R=1400) gains less ELO beating a weak one (R=1000)."""
-        tracker._ratings["strong"] = 1400.0
-        tracker._ratings["weak"]   = 1000.0
-        new_strong, _ = tracker.update("strong", "weak", score_a=1.0)
-        gain = new_strong - 1400.0
-        assert 0 < gain < 5.0  # expected to gain very little
-
-    def test_sum_of_ratings_preserved(self, tracker):
-        """ELO is zero-sum: total rating mass is conserved across any game."""
-        before = tracker.rating("a") + tracker.rating("b")
-        tracker.update("a", "b", score_a=1.0)
-        after  = tracker.rating("a") + tracker.rating("b")
-        assert abs(before - after) < 1e-6
-
-    def test_update_from_results(self, tracker):
-        tracker.update_from_results("a", "b", wins_a=3, draws=1, wins_b=1)
-        # 'a' won more, so should have higher rating
-        assert tracker.rating("a") > tracker.rating("b")
-
-    def test_save_and_load(self, tmp_path):
-        path = str(tmp_path / "elo2.json")
-        t1   = EloTracker(path, k=32.0)
-        t1.update("x", "y", score_a=1.0)
-        t1.save()
-        t2 = EloTracker(path, k=32.0)
-        assert t2.rating("x") == pytest.approx(t1.rating("x"))
-
-    def test_all_ratings_returns_copy(self, tracker):
-        tracker.rating("p")  # initialise with default
-        tracker.update("p", "q", 1.0)
-        d = tracker.all_ratings()
-        d["p"] = 9999.0  # mutate the copy
-        assert tracker.rating("p") != 9999.0
-
-
 # ── Checkpoints ───────────────────────────────────────────────────────────────
 
 class TestCheckpoints:
@@ -226,20 +163,20 @@ class TestCheckpoints:
         path = str(tmp_path / "ckpt.pt")
         config = DEBUG
 
-        checkpoints.save(path, small_net, optimizer, scheduler, 3, buf, {"best": 1010.0}, config)
+        checkpoints.save(path, small_net, optimizer, scheduler, 3, buf, 5, config)
         assert os.path.exists(path)
 
         net2   = AlphaNet(enc.num_channels, game.action_size, num_resblocks=1, num_hidden=8)
         opt2   = torch.optim.Adam(net2.parameters(), lr=1e-3)
         sch2   = torch.optim.lr_scheduler.MultiStepLR(opt2, milestones=[5])
 
-        iteration, buf2, elo2 = checkpoints.load(
+        iteration, buf2, promotion_count = checkpoints.load(
             path, net2, opt2, sch2, torch.device("cpu")
         )
 
-        assert iteration  == 3
-        assert len(buf2)  == 10
-        assert elo2.get("best") == pytest.approx(1010.0)
+        assert iteration        == 3
+        assert len(buf2)        == 10
+        assert promotion_count  == 5
 
     def test_model_weights_preserved(self, small_net, enc, game, dummy_example, tmp_path):
         optimizer = torch.optim.Adam(small_net.parameters())
@@ -248,7 +185,7 @@ class TestCheckpoints:
         path      = str(tmp_path / "ckpt2.pt")
         config    = DEBUG
 
-        checkpoints.save(path, small_net, optimizer, scheduler, 0, buf, {}, config)
+        checkpoints.save(path, small_net, optimizer, scheduler, 0, buf, 0, config)
 
         net2 = AlphaNet(enc.num_channels, game.action_size, num_resblocks=1, num_hidden=8)
         opt2 = torch.optim.Adam(net2.parameters())
@@ -271,7 +208,7 @@ class TestCheckpoints:
 
         for i in [0, 3, 7]:
             p = str(tmp_path / f"checkpoint_{i}.pt")
-            checkpoints.save(p, small_net, optimizer, scheduler, i, buf, {}, config)
+            checkpoints.save(p, small_net, optimizer, scheduler, i, buf, 0, config)
 
         latest = checkpoints.find_latest(str(tmp_path))
         assert latest is not None

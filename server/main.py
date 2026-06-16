@@ -391,7 +391,7 @@ async def list_checkpoints():
                 "id":        f"{run_name}/{stem}",
                 "run":       run_name,
                 "iteration": meta.get("iteration", iteration),
-                "elo":       meta.get("elo", None),
+                "promotions": meta.get("promotions", None),
                 "buffer":    meta.get("buffer", None),
                 "saved_at":  meta.get("saved_at", None),
                 "filename":  fname,
