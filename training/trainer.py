@@ -191,7 +191,7 @@ class Trainer:
         total_iters = tc.num_iterations
 
         outer = tqdm(
-            range(start_iter, total_iters),
+            range(start_iter + 1 if resume_from else start_iter, total_iters),
             desc=f"{config.name}",
             unit="iter",
             dynamic_ncols=True,
