@@ -82,7 +82,11 @@ def save(
         },
     }
 
-    torch.save(payload, path)
+    # Write to a temp file then rename so a mid-write SIGKILL never leaves a
+    # partial checkpoint at the real path (os.replace is POSIX-atomic).
+    tmp_path = path + ".tmp"
+    torch.save(payload, tmp_path)
+    os.replace(tmp_path, path)
 
     # Small sidecar so the UI can show metadata without loading the full checkpoint
     sidecar = path.replace(".pt", ".json")
@@ -143,16 +147,23 @@ def load(
     return iteration, buffer, elo_ratings
 
 
+def _atomic_copy(src: str, dst: str) -> None:
+    """Copy src → dst atomically (via tmp + rename) to survive mid-write SIGKILL."""
+    tmp = dst + ".tmp"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
 def save_best(src_path: str, checkpoint_dir: str) -> str:
     """
     Copy *src_path* to checkpoint_best.pt (+ sidecar .json) in the same directory.
     Returns the path of the best checkpoint file.
     """
     best_path = os.path.join(checkpoint_dir, "checkpoint_best.pt")
-    shutil.copy2(src_path, best_path)
+    _atomic_copy(src_path, best_path)
     src_json = src_path.replace(".pt", ".json")
     if os.path.exists(src_json):
-        shutil.copy2(src_json, best_path.replace(".pt", ".json"))
+        _atomic_copy(src_json, best_path.replace(".pt", ".json"))
     return best_path
 
 
@@ -162,10 +173,10 @@ def save_latest(src_path: str, checkpoint_dir: str) -> str:
     Returns the path of the latest checkpoint file.
     """
     latest_path = os.path.join(checkpoint_dir, "checkpoint_latest.pt")
-    shutil.copy2(src_path, latest_path)
+    _atomic_copy(src_path, latest_path)
     src_json = src_path.replace(".pt", ".json")
     if os.path.exists(src_json):
-        shutil.copy2(src_json, latest_path.replace(".pt", ".json"))
+        _atomic_copy(src_json, latest_path.replace(".pt", ".json"))
     return latest_path
 
 
@@ -174,6 +185,13 @@ def prune_old_checkpoints(checkpoint_dir: str, keep: int = 1) -> None:
     Delete numbered checkpoints beyond the most recent *keep*, preserving
     checkpoint_best.pt and checkpoint_latest.pt. Prevents disk exhaustion on long runs.
     """
+    # Clean up any leftover temp files from interrupted atomic writes
+    for tmp in glob.glob(os.path.join(checkpoint_dir, "*.tmp")):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files = sorted(
         [f for f in glob.glob(pattern)

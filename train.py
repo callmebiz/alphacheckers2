@@ -33,6 +33,8 @@ UI server in a separate terminal while training is running:
 """
 
 import argparse
+import json
+import os
 
 import numpy as np
 import torch
@@ -137,7 +139,17 @@ def main() -> None:
         resume_path = args.resume
         print(f"Resuming from: {resume_path}")
 
-    trainer = Trainer(config, s3_bucket=args.s3_bucket or "", mlflow_run_id=args.mlflow_run_id or "")
+    # Prefer explicit flag; fall back to sidecar when resuming.
+    mlflow_run_id = args.mlflow_run_id or ""
+    if resume_path and not mlflow_run_id:
+        sidecar = resume_path.replace(".pt", ".json")
+        if os.path.exists(sidecar):
+            with open(sidecar) as f:
+                mlflow_run_id = json.load(f).get("mlflow_run_id", "")
+            if mlflow_run_id:
+                print(f"Resuming MLflow run: {mlflow_run_id}")
+
+    trainer = Trainer(config, s3_bucket=args.s3_bucket or "", mlflow_run_id=mlflow_run_id)
     trainer.train(resume_from=resume_path)
 
 
