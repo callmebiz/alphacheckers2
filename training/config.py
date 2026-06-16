@@ -102,6 +102,7 @@ class TrainingConfig:
     min_buffer_size:     int        = 1_000
     grad_clip:           float      = 1.0   # max gradient norm; 0 = disabled
     num_workers:         int        = 1     # parallel processes for self-play/eval; 0 = cpu_count-1, 1 = sequential
+    value_mix:           float      = 0.0   # 0 = pure game outcome; >0 mixes in MCTS Q-value as soft target
 
 
 @dataclass
@@ -219,14 +220,16 @@ DEV = RunConfig(
 MEDIUM = RunConfig(
     name="medium",
     model=ModelConfig(num_resblocks=8, num_hidden=96),
-    mcts=MCTSConfig(num_simulations=200, temperature_init=1.0, temperature_final=0.0, temp_drop_move=30),
+    mcts=MCTSConfig(num_simulations=200, temperature_init=1.0, temperature_final=0.0, temp_drop_move=30,
+                    dirichlet_alpha=0.6),
     training=TrainingConfig(
         num_iterations=150, num_self_play_games=50, num_epochs=4,
         batch_size=256, replay_buffer_size=200_000, min_buffer_size=1_000,
         lr_milestones=[80, 120, 140],
         num_workers=1,
+        value_mix=0.5,
     ),
-    eval=EvalConfig(tournament_games=20, eval_every_n_iters=2),
+    eval=EvalConfig(tournament_games=40, eval_every_n_iters=2),
 )
 
 FULL = RunConfig(

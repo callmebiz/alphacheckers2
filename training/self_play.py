@@ -222,7 +222,7 @@ def play_game(
     state           = game.get_initial_state()
     player          = 1
     move_number     = 0
-    recorded: list[tuple[torch.Tensor, np.ndarray, int]] = []
+    recorded: list[tuple[torch.Tensor, np.ndarray, int, float]] = []  # (enc, policy, player, mcts_q)
     replay_moves: list[dict] = []
     move_entropies:  list[float] = []
     move_top1_probs: list[float] = []
@@ -242,11 +242,12 @@ def play_game(
         encoded    = encoder.encode(state, player)
         train_prob = mcts.search(state, player, temperature=temp)
         raw_prob   = mcts.raw_visit_probs()  # temp=1 proportions — free, root already built
+        root_q     = mcts.root_value()       # MCTS Q-value for value-target mixing
 
         # Resignation check — only after the model has seen enough of the game.
         # Uses the root Q-value (MCTS-averaged, not raw NN output) for stability.
         if mc.resign_threshold < 1.0 and move_number >= mc.resign_min_move:
-            root_val = mcts.root_value()
+            root_val = root_q
             if root_val < -mc.resign_threshold:
                 resign_counts[player] += 1
                 if resign_counts[player] >= mc.resign_consecutive:
@@ -259,7 +260,7 @@ def play_game(
         # Sample the actual move from the training distribution
         action = int(np.random.choice(game.action_size, p=train_prob))
 
-        recorded.append((encoded, train_prob, player))
+        recorded.append((encoded, train_prob, player, root_q))
 
         # Per-move spread stats — flag forced captures (n_legal==1) so the
         # caller can exclude trivially-zero entropies from the min stat.
@@ -289,10 +290,13 @@ def play_game(
     # `player` is the terminal player: the one who resigned, couldn't move, or
     # whose turn it is at the end.  `outcome` is from that player's perspective.
     terminal_player = player
-    examples = [
-        (enc_state, policy, outcome if p == terminal_player else -outcome)
-        for enc_state, policy, p in recorded
-    ]
+    vm = config.training.value_mix
+
+    examples: list[tuple[torch.Tensor, np.ndarray, float]] = []
+    for enc_state, policy, p, q in recorded:
+        game_val = outcome if p == terminal_player else -outcome
+        val      = game_val if vm == 0.0 else (1.0 - vm) * game_val + vm * q
+        examples.append((enc_state, policy, val))
 
     if outcome < 0:
         absolute_winner = game.get_opponent(player)
