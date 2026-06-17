@@ -18,16 +18,20 @@ other module together. One iteration of the loop does four things:
   │                 update the status.json the UI reads.                │
   └─────────────────────────────────────────────────────────────────────┘
 
-Two model instances are maintained:
-  best_model   — the current gold standard; used for self-play and as the
-                 bar the challenger must beat. Never trained directly.
-  model        — the challenger being trained. Gets a fresh copy of
-                 best_model's weights each iteration as a starting point.
+Two learning modes (controlled by config.eval.gated):
 
-Why not just train the model in-place?
-  If the model gets worse during a bad training step (unlucky batch, sharp
-  gradient), we want the safety net of the last best_model. The promotion
-  gate ensures the 'best' label only moves forward.
+  Gated (default, AlphaGo Zero style)
+    Two model instances: best_model for self-play, model (challenger) for
+    training. A tournament runs every eval_every_n_iters iterations; the
+    challenger replaces best_model only if it wins >= promotion_threshold.
+    Otherwise the challenger is reset to best_model's weights. Protects
+    against regression at the cost of slower effective update rate.
+
+  Continuous (hybrid style)
+    Self-play always uses the latest model weights. A tournament still
+    runs every eval_every_n_iters for benchmarking, and the best_model
+    snapshot advances on promotion, but non-promotion never resets the
+    challenger. Faster iteration throughput with no regression guard.
 
 Mixed precision (AMP)
   On CUDA, torch.amp.autocast halves memory usage and speeds up training
@@ -106,7 +110,9 @@ class Trainer:
             num_hidden=mc.num_hidden,
         ).to(self.device)
 
-        # Best model — never trained; only updated on successful promotion
+        # best_model is a frozen snapshot kept as the tournament opponent.
+        # In gated mode it also drives self-play; in continuous mode self-play
+        # uses self.model (latest) but the tournament still needs a snapshot.
         self.best_model = copy.deepcopy(self.model)
         self.best_model.eval()
 
@@ -206,11 +212,12 @@ class Trainer:
 
                 # ── Step 1: Self-play ──────────────────────────────────────
                 outer.set_description(f"{config.name} | self-play")
+                sp_model = self.best_model if config.eval.gated else self.model
                 examples, sp_stats = generate_games(
                     n_games=tc.num_self_play_games,
                     game=self.game,
                     encoder=self.encoder,
-                    model=self.best_model,
+                    model=sp_model,
                     config=config,
                     device=self.device,
                     iteration=iteration,
@@ -265,7 +272,7 @@ class Trainer:
                             f"  ✓ iter {iteration+1}: promoted "
                             f"(win rate {result.win_rate:.0%}, #{self._promotion_count})"
                         )
-                    else:
+                    elif config.eval.gated:
                         self.model.load_state_dict(self.best_model.state_dict())
 
                 # ── Step 4: Log + checkpoint ───────────────────────────────
@@ -327,10 +334,10 @@ class Trainer:
                 free_gb = shutil.disk_usage(config.checkpoint_dir).free / 1024**3
                 tracker.log_system(step=iteration, iter_time_seconds=elapsed, disk_free_gb=free_gb)
                 pf: dict = dict(
-                    promo=str(self._promotion_count),
                     p=f"{policy_loss:.3f}",
                     v=f"{value_loss:.3f}",
                     t=f"{elapsed:.0f}s",
+                    promo=str(self._promotion_count),
                 )
                 if result is not None:
                     pf["eval"] = "✓" if promoted else f"✗{result.win_rate:.0%}"
@@ -472,14 +479,14 @@ class Trainer:
             tqdm.write(f"  ✓ S3: {base}/{dest_stem}.pt")
 
     def _upload_mlflow_db(self) -> None:
-        """Upload mlflow.db to S3 so the next instance can resume the same run."""
+        """Upload mlflow.db to S3 namespaced by config.name so concurrent experiments don't overwrite each other."""
         if not self._s3_bucket:
             return
         import subprocess
         db = self.config.mlflow_uri.replace("sqlite:///", "")
         if not os.path.exists(db):
             return
-        dest = f"s3://{self._s3_bucket}/mlflow.db"
+        dest = f"s3://{self._s3_bucket}/mlflow-{self.config.name}.db"
         r = subprocess.run(["aws", "s3", "cp", db, dest],
                            capture_output=True, text=True)
         if r.returncode != 0:

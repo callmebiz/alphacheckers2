@@ -68,6 +68,11 @@ def parse_args() -> argparse.Namespace:
         help="Override num_workers: 0 = auto (cpu_count-1), 1 = sequential",
     )
     p.add_argument(
+        "--name", default=None,
+        help="Override config.name — sets local run dir and S3 path prefix. "
+             "Required when running multiple experiments with the same config preset.",
+    )
+    p.add_argument(
         "--experiment", default=None,
         help="MLflow experiment name (groups related runs in the UI)",
     )
@@ -107,6 +112,8 @@ def main() -> None:
     config: RunConfig = PRESETS[args.config]
 
     # Apply CLI overrides
+    if args.name:
+        config.name = args.name
     if args.device:
         config.device = args.device
     if args.seed is not None:

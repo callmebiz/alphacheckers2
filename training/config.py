@@ -109,16 +109,28 @@ class EvalConfig:
     """
     Model evaluation and promotion parameters.
 
+    gated
+        True  (default) — AlphaGo Zero style: a separate best_model drives
+        self-play; the challenger must win >= promotion_threshold of a
+        tournament to replace it, otherwise its weights are reset. Protects
+        against regression at the cost of slower effective update rate.
+        False — Continuous (hybrid) style: self-play always uses the latest
+        model weights. A tournament still runs every eval_every_n_iters for
+        benchmarking and the best_model snapshot advances on promotion, but
+        non-promotion never resets the challenger. Faster throughput with no
+        safety net against bad training steps.
+
     promotion_threshold
         The new checkpoint must win at least this fraction of tournament
         games to replace the current best model. Set to 0.5 for "any
         improvement" or higher (e.g. 0.55) to require a statistically
-        meaningful gain before promoting.
+        meaningful gain before promoting. Ignored when gated=False.
 
     eval_every_n_iters
         Run evaluation every N training iterations. Setting this > 1 saves
-        time when tournament games are expensive.
+        time when tournament games are expensive. Ignored when gated=False.
     """
+    gated:               bool  = True   # True = gated (AlphaGo Zero); False = continuous (AlphaZero)
     tournament_games:    int   = 40
     promotion_threshold: float = 0.55
     eval_every_n_iters:  int   = 1
