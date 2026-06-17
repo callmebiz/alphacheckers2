@@ -223,7 +223,7 @@ MEDIUM = RunConfig(
         lr_milestones=[160, 240, 280],
         num_workers=1,
     ),
-    eval=EvalConfig(tournament_games=40, eval_every_n_iters=2),
+    eval=EvalConfig(tournament_games=40, eval_every_n_iters=4),
 )
 
 FULL = RunConfig(
