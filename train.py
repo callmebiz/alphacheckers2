@@ -89,6 +89,12 @@ def parse_args() -> argparse.Namespace:
         help="Override number of training iterations (default: from config)",
     )
     p.add_argument(
+        "--no-gated", action="store_true", dest="no_gated",
+        help="Continuous mode: tournament still runs every eval_every_n_iters for "
+             "benchmarking, but non-promotion never resets the model. Default is "
+             "gated (AlphaGo Zero style) where non-promotion resets the challenger.",
+    )
+    p.add_argument(
         "--s3-bucket", default=None, dest="s3_bucket",
         help="S3 bucket name — upload checkpoint_best.pt after each promotion",
     )
@@ -128,6 +134,8 @@ def main() -> None:
         config.mcts.num_simulations = args.sims
     if args.iters is not None:
         config.training.num_iterations = args.iters
+    if args.no_gated:
+        config.eval.gated = False
 
     seed_everything(config.seed)
 
