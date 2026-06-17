@@ -17,9 +17,10 @@ Tournament design
 - N games total, alternating which model plays as Player 1 and Player 2.
   This removes colour bias from the results — a model that only wins as P1
   should not be promoted.
-- Temperature = 0 (greedy) during evaluation so results reflect the model's
-  actual strength, not sampling randomness.
-- Dirichlet noise is disabled — deterministic play gives cleaner signal.
+- First two half-moves (one per side) are sampled at temperature=1 from
+  the honest MCTS visit distribution so each game explores a different
+  opening. All subsequent moves are greedy (temperature=0).
+- Dirichlet noise is disabled throughout — the tree is always built cleanly.
 
 Returned statistics
 -------------------
@@ -155,8 +156,8 @@ def run_tournament(
     Play `config.eval.tournament_games` games between challenger and champion.
 
     Games alternate which model plays as Player 1 so colour advantage averages
-    out. Both models use greedy temperature (τ=0) and no Dirichlet noise for
-    clean, deterministic signal.
+    out. First two half-moves are sampled at temperature=1 for opening diversity;
+    all subsequent moves are greedy (τ=0). No Dirichlet noise throughout.
 
     Parameters
     ----------
@@ -333,8 +334,15 @@ def _play_eval_game(
             pieces = int(np.abs(state["board"]).sum())
             return value if player == 1 else -value, move_count, pieces, replay_moves
 
-        probs  = mcts_map[player].search(state, player, temperature=0)
-        action = int(np.argmax(probs))
+        # First two half-moves (one per side) sampled at temperature=1 so each
+        # game explores a different opening; the rest are greedy (temperature=0).
+        temp   = 1.0 if move_count < 2 else 0.0
+        probs  = mcts_map[player].search(state, player, temperature=temp)
+        action = (
+            int(np.random.choice(game.action_size, p=probs))
+            if temp > 0
+            else int(np.argmax(probs))
+        )
 
         if save_moves:
             raw_prob = mcts_map[player].raw_visit_probs()

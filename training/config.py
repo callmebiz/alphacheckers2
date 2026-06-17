@@ -122,7 +122,7 @@ class EvalConfig:
     tournament_games:    int   = 40
     promotion_threshold: float = 0.55
     eval_every_n_iters:  int   = 1
-    eval_noise_eps:      float = 0.1   # small Dirichlet noise during eval so games diverge
+    eval_noise_eps:      float = 0.0   # Dirichlet noise during eval (0 = disabled; diversity handled by temperature)
 
 
 # ── Top-level run config ──────────────────────────────────────────────────────
