@@ -153,6 +153,8 @@ class Trainer:
         )
 
         self._s3_bucket = s3_bucket
+        self._run_segment: int = 0       # incremented each time training resumes from checkpoint
+        self._iter_times: list[float] = []  # rolling window for ETA calculation
         self._shutdown = False
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -171,15 +173,16 @@ class Trainer:
 
         start_iter = 0
         if resume_from:
-            start_iter, self.buffer, self._promotion_count = checkpoints.load(
+            start_iter, self.buffer, self._promotion_count, prev_segment = checkpoints.load(
                 resume_from, self.model, self.optimizer, self.scheduler, self.device
             )
+            self._run_segment = prev_segment + 1
             self.best_model.load_state_dict(self.model.state_dict())
             n_buf   = len(self.buffer)
             free_gb = shutil.disk_usage(self.config.checkpoint_dir).free / 1024**3
             print(
-                f"Resumed iter {start_iter} | promotions {self._promotion_count} | "
-                f"buffer {n_buf:,} | disk free {free_gb:.1f} GB"
+                f"Resumed iter {start_iter} | segment {self._run_segment} | "
+                f"promotions {self._promotion_count} | buffer {n_buf:,} | disk free {free_gb:.1f} GB"
             )
 
         config = self.config
@@ -212,6 +215,7 @@ class Trainer:
 
                 # ── Step 1: Self-play ──────────────────────────────────────
                 outer.set_description(f"{config.name} | self-play")
+                t0_sp = time.time()
                 sp_model = self.best_model if config.eval.gated else self.model
                 examples, sp_stats = generate_games(
                     n_games=tc.num_self_play_games,
@@ -226,6 +230,7 @@ class Trainer:
                     executor=self._executor,
                 )
                 self.buffer.add_many(examples)
+                t_sp = time.time() - t0_sp
 
                 if self._shutdown:
                     break  # stopped mid self-play; skip train/eval/log for this iteration
@@ -236,9 +241,12 @@ class Trainer:
                 # ── Step 2: Train network ──────────────────────────────────
                 trained = False
                 policy_loss = value_loss = value_mae = 0.0
+                t_train = 0.0
                 if len(self.buffer) >= tc.min_buffer_size:
                     outer.set_description(f"{config.name} | training")
+                    t0_train = time.time()
                     policy_loss, value_loss, value_mae = self._train_epochs()
+                    t_train = time.time() - t0_train
                     trained = True
                     self.scheduler.step()
 
@@ -248,9 +256,11 @@ class Trainer:
                 # ── Step 3: Evaluate ───────────────────────────────────────
                 promoted = False
                 result   = None
+                t_eval   = 0.0
 
                 if (iteration + 1) % config.eval.eval_every_n_iters == 0:
                     outer.set_description(f"{config.name} | eval")
+                    t0_eval = time.time()
                     result = run_tournament(
                         self.model, self.best_model,
                         self.game, self.encoder, config, self.device,
@@ -259,6 +269,7 @@ class Trainer:
                         iteration=iteration,
                         mlflow_run_name=tracker.run_name,
                     )
+                    t_eval = time.time() - t0_eval
 
                     if self._shutdown:
                         break  # discard partial tournament; don't promote on incomplete results
@@ -316,6 +327,7 @@ class Trainer:
                     ckpt_path, self.best_model, self.optimizer, self.scheduler,
                     iteration, self.buffer, self._promotion_count, config,
                     mlflow_run_id=tracker.run_id,
+                    run_segment=self._run_segment,
                 )
                 latest_path = checkpoints.save_latest(ckpt_path, config.checkpoint_dir)
                 self._upload_to_s3(latest_path, "checkpoint_latest")
@@ -343,12 +355,29 @@ class Trainer:
 
                 # Update outer bar — one summary line per iteration
                 elapsed = time.time() - t0
+                self._iter_times.append(elapsed)
+                if len(self._iter_times) > 10:
+                    self._iter_times.pop(0)
+                avg_iter = sum(self._iter_times) / len(self._iter_times)
+                eta_hours = avg_iter * (total_iters - (iteration + 1)) / 3600
+
                 free_gb = shutil.disk_usage(config.checkpoint_dir).free / 1024**3
-                tracker.log_system(step=iteration, iter_time_seconds=elapsed, disk_free_gb=free_gb)
+                tracker.log_system(
+                    step=iteration,
+                    iter_time_seconds=elapsed,
+                    disk_free_gb=free_gb,
+                    selfplay_time_s=t_sp,
+                    train_time_s=t_train,
+                    eval_time_s=t_eval,
+                    eta_hours=eta_hours,
+                    run_segment=self._run_segment,
+                )
                 pf: dict = dict(
                     p=f"{policy_loss:.3f}",
                     v=f"{value_loss:.3f}",
                     t=f"{elapsed:.0f}s",
+                    eta=f"{eta_hours:.1f}h",
+                    seg=str(self._run_segment),
                     promo=str(self._promotion_count),
                 )
                 if result is not None:

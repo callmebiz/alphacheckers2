@@ -59,6 +59,7 @@ def save(
     promotion_count: int,
     config: RunConfig,
     mlflow_run_id: str = "",
+    run_segment: int = 0,
 ) -> None:
     """
     Write a full training checkpoint to *path*.
@@ -77,6 +78,7 @@ def save(
         "iteration":       iteration,
         "replay_buffer":   buffer.state_dict(),
         "promotion_count": promotion_count,
+        "run_segment":     run_segment,
         "config":          dataclasses.asdict(config),
         "rng_states": {
             "python":  random.getstate(),
@@ -110,7 +112,7 @@ def load(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     device: torch.device,
-) -> tuple[int, ReplayBuffer, int]:
+) -> tuple[int, ReplayBuffer, int, int]:
     """
     Restore training state from *path* and return (iteration, buffer, promotion_count).
 
@@ -146,9 +148,10 @@ def load(
 
     buffer          = ReplayBuffer.from_state_dict(payload["replay_buffer"])
     promotion_count = payload.get("promotion_count", 0)
+    run_segment     = payload.get("run_segment", 0)
     iteration       = payload["iteration"]
 
-    return iteration, buffer, promotion_count
+    return iteration, buffer, promotion_count, run_segment
 
 
 def _atomic_copy(src: str, dst: str) -> None:

@@ -32,6 +32,14 @@ Metrics (logged once per training iteration as a time-series):
   analysis/value_mae         — value head calibration error
   analysis/opening_entropy   — diversity of first moves
 
+  system/iter_time_s         — wall-clock seconds for the full iteration
+  system/selfplay_time_s     — seconds spent in self-play phase
+  system/train_time_s        — seconds spent in network training phase
+  system/eval_time_s         — seconds spent in tournament evaluation phase
+  system/eta_hours           — estimated hours remaining (rolling 10-iter average)
+  system/run_segment         — spot-instance restart count (0 = original start)
+  system/disk_free_gb        — GB free on the checkpoint disk
+
 Artifacts (files attached to the MLflow run):
   config.json          — full config as JSON (self-describing run)
 
@@ -206,11 +214,21 @@ class MLflowTracker:
         step: int,
         iter_time_seconds: float,
         disk_free_gb: float,
+        selfplay_time_s: float = 0.0,
+        train_time_s: float = 0.0,
+        eval_time_s: float = 0.0,
+        eta_hours: float = 0.0,
+        run_segment: int = 0,
     ) -> None:
-        """Log per-iteration system metrics: wall-clock time and available disk."""
+        """Log per-iteration system metrics: wall-clock time, phase breakdown, ETA, disk."""
         mlflow.log_metrics({
-            "system/iter_time_s": iter_time_seconds,
-            "system/disk_free_gb": disk_free_gb,
+            "system/iter_time_s":    iter_time_seconds,
+            "system/selfplay_time_s": selfplay_time_s,
+            "system/train_time_s":   train_time_s,
+            "system/eval_time_s":    eval_time_s,
+            "system/eta_hours":      eta_hours,
+            "system/run_segment":    float(run_segment),
+            "system/disk_free_gb":   disk_free_gb,
         }, step=step)
 
     def log_selfplay(
