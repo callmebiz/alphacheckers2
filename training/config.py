@@ -243,11 +243,11 @@ FULL = RunConfig(
     model=ModelConfig(num_resblocks=12, num_hidden=128),
     mcts=MCTSConfig(num_simulations=200, temperature_init=1.0, temperature_final=0.0, temp_drop_move=30),
     training=TrainingConfig(
-        num_iterations=100, num_self_play_games=100, num_epochs=4,
+        num_iterations=300, num_self_play_games=100, num_epochs=4,
         batch_size=256, replay_buffer_size=500_000, min_buffer_size=2_000,
-        lr_milestones=[60, 80, 90],
+        lr_milestones=[160, 240, 280],
     ),
-    eval=EvalConfig(tournament_games=40, eval_every_n_iters=1),
+    eval=EvalConfig(tournament_games=100, eval_every_n_iters=30),
 )
 
 PRESETS: dict[str, RunConfig] = {"debug": DEBUG, "dev": DEV, "medium": MEDIUM, "full": FULL}

@@ -69,5 +69,6 @@ ec2_manager.log
 test_mlflow_persistence.py
 CLOUD.md
 dump_metrics.py
+fetch_models.py
 test_ec2_manager.py
 *.log

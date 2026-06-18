@@ -24,8 +24,12 @@ any extra flags. The trainer moves the model to the target device after loading.
 
 Naming convention
 -----------------
-  checkpoint_{iteration}.pt   — snapshot every N iterations
-  checkpoint_best.pt          — the current best model (symlink-style copy)
+  checkpoint_{iteration}.pt        — full snapshot every N iterations (pruned to keep=1)
+  checkpoint_latest.pt             — copy of the most recent full snapshot
+  checkpoint_best.pt               — copy of the best model so far (on promotion)
+  checkpoint_eval_{iter:04d}.pt    — lightweight snapshot (model + config only) saved at
+                                     every eval step; pruned locally to keep=5; all
+                                     versions stored in S3 for later download
 """
 
 from __future__ import annotations
@@ -180,10 +184,58 @@ def save_latest(src_path: str, checkpoint_dir: str) -> str:
     return latest_path
 
 
+def save_eval_snapshot(
+    path: str,
+    model: torch.nn.Module,
+    config: RunConfig,
+    iteration: int,
+    promotion_count: int,
+) -> None:
+    """
+    Save a lightweight checkpoint containing only model weights + config.
+
+    Omits the replay buffer, optimizer, scheduler, and RNG states — typically
+    10-50x smaller than a full checkpoint. Sufficient for playing against the
+    model in the UI or for post-hoc analysis. Not suitable for resuming training.
+    """
+    import dataclasses as _dc
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    payload = {
+        "model_state":     {k: v.cpu() for k, v in model.state_dict().items()},
+        "config":          _dc.asdict(config),
+        "iteration":       iteration,
+        "promotion_count": promotion_count,
+    }
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
+
+    sidecar = path.replace(".pt", ".json")
+    with open(sidecar, "w") as f:
+        json.dump({
+            "iteration":      iteration,
+            "promotions":     promotion_count,
+            "saved_at":       time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "snapshot_type":  "eval",
+        }, f)
+
+
+def prune_eval_snapshots(checkpoint_dir: str, keep: int = 5) -> None:
+    """Delete old eval snapshots, keeping the most recent *keep* on disk."""
+    pattern = os.path.join(checkpoint_dir, "checkpoint_eval_*.pt")
+    files   = sorted(glob.glob(pattern))   # lexicographic = chronological with zero-padded names
+    for old in files[:-keep]:
+        for path in (old, old.replace(".pt", ".json")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def prune_old_checkpoints(checkpoint_dir: str, keep: int = 1) -> None:
     """
     Delete numbered checkpoints beyond the most recent *keep*, preserving
-    checkpoint_best.pt and checkpoint_latest.pt. Prevents disk exhaustion on long runs.
+    checkpoint_best.pt, checkpoint_latest.pt, and checkpoint_eval_*.pt.
     """
     # Clean up any leftover temp files from interrupted atomic writes
     for tmp in glob.glob(os.path.join(checkpoint_dir, "*.tmp")):
@@ -192,10 +244,12 @@ def prune_old_checkpoints(checkpoint_dir: str, keep: int = 1) -> None:
         except OSError:
             pass
 
+    _skip = {"checkpoint_best.pt", "checkpoint_latest.pt"}
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files = sorted(
         [f for f in glob.glob(pattern)
-         if os.path.basename(f) not in ("checkpoint_best.pt", "checkpoint_latest.pt")],
+         if os.path.basename(f) not in _skip
+         and not os.path.basename(f).startswith("checkpoint_eval_")],
         key=lambda p: int(
             os.path.basename(p).replace("checkpoint_", "").replace(".pt", "") or -1
         ),
@@ -216,9 +270,11 @@ def find_latest(checkpoint_dir: str) -> str | None:
     and returns the one with the highest iteration number.
     """
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
+    _skip   = {"checkpoint_best.pt", "checkpoint_latest.pt"}
     files   = [
         f for f in glob.glob(pattern)
-        if os.path.basename(f) not in ("checkpoint_best.pt", "checkpoint_latest.pt")
+        if os.path.basename(f) not in _skip
+        and not os.path.basename(f).startswith("checkpoint_eval_")
     ]
     if not files:
         return None

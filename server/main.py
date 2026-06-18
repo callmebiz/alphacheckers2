@@ -178,8 +178,11 @@ async def game_ws(ws: WebSocket):
 
     state          = game_engine.get_initial_state()
     current_player = 1
-    ai_player:  int | None  = None   # which player index the AI controls
-    ai_mcts:    MCTS | None = None
+    ai_player:    int | None  = None   # player index the first AI controls (or P1 in AI vs AI)
+    ai_mcts:      MCTS | None = None
+    ai_player_2:  int | None  = None   # second AI player (AI vs AI mode only)
+    ai_mcts_p2:   MCTS | None = None
+    ai_move_delay: float      = 0.0    # extra pause between AI moves (AI vs AI only)
 
     def _win_msg() -> str:
         val, _ = game_engine.get_value_and_terminated(state, current_player)
@@ -190,21 +193,25 @@ async def game_ws(ws: WebSocket):
         return "Draw!"
 
     async def do_ai_turn() -> None:
-        """Drive AI moves until it's the human's turn or the game ends."""
+        """Drive AI moves until it's the human's turn (or game ends in AI vs AI)."""
         nonlocal state, current_player
-        if ai_mcts is None or ai_player is None:
-            return
         loop = asyncio.get_running_loop()
-        while current_player == ai_player:
+        while True:
             _, terminated = game_engine.get_value_and_terminated(state, current_player)
             if terminated:
                 break
-            # Signal to the client that the AI is computing
+            if current_player == ai_player and ai_mcts is not None:
+                mcts_to_use = ai_mcts
+            elif current_player == ai_player_2 and ai_mcts_p2 is not None:
+                mcts_to_use = ai_mcts_p2
+            else:
+                break  # human's turn
+            if ai_move_delay > 0:
+                await asyncio.sleep(ai_move_delay)
             payload = _state_payload(state, current_player)
             payload["thinking"] = True
             await ws.send_text(json.dumps(payload))
-            # Run MCTS in a thread so the event loop stays responsive
-            probs  = await loop.run_in_executor(None, ai_mcts.search, state, current_player, 0)
+            probs  = await loop.run_in_executor(None, mcts_to_use.search, state, current_player, 0)
             action = int(np.argmax(probs))
             state  = game_engine.get_next_state(state, action, current_player)
             if state["jump_again"] is None:
@@ -223,8 +230,12 @@ async def game_ws(ws: WebSocket):
             if msg.get("type") == "reset":
                 state          = game_engine.get_initial_state()
                 current_player = 1
-                mode_msg = (f"vs AI — you are Player {game_engine.get_opponent(ai_player)}"
-                            if ai_player else "Game reset")
+                if ai_player_2 is not None:
+                    mode_msg = "AI vs AI — new game"
+                elif ai_player is not None:
+                    mode_msg = f"vs AI — you are Player {game_engine.get_opponent(ai_player)}"
+                else:
+                    mode_msg = "Game reset"
                 await ws.send_text(json.dumps(_state_payload(state, current_player, mode_msg)))
                 try:
                     await do_ai_turn()
@@ -235,6 +246,10 @@ async def game_ws(ws: WebSocket):
                 checkpoint_id = msg.get("checkpoint", "")
                 human_player  = int(msg.get("human_player", 1))
                 num_sims      = max(1, int(msg.get("simulations", 200)))
+
+                # Always clear AI vs AI state when switching to human vs AI
+                ai_player_2 = None
+                ai_mcts_p2  = None
 
                 if checkpoint_id:
                     loop = asyncio.get_running_loop()
@@ -256,6 +271,44 @@ async def game_ws(ws: WebSocket):
                 state          = game_engine.get_initial_state()
                 current_player = 1
                 await ws.send_text(json.dumps(_state_payload(state, current_player, mode_msg)))
+                try:
+                    await do_ai_turn()
+                except Exception as exc:
+                    await ws.send_text(json.dumps({"error": f"AI error: {exc}"}))
+
+            elif msg.get("type") == "ai_vs_ai":
+                ckpt_p1       = msg.get("checkpoint_p1", "")
+                ckpt_p2       = msg.get("checkpoint_p2", "")
+                num_sims      = max(1, int(msg.get("simulations", 200)))
+                ai_move_delay = float(msg.get("delay_ms", 0)) / 1000.0
+                if not ckpt_p1 or not ckpt_p2:
+                    await ws.send_text(json.dumps({"error": "Both checkpoints required for AI vs AI"}))
+                    continue
+                loop = asyncio.get_running_loop()
+                try:
+                    print(f"[ai_vs_ai] Loading P1: {ckpt_p1}", flush=True)
+                    await ws.send_text(json.dumps({"loading": f"Loading P1 model ({ckpt_p1})…"}))
+                    p1_mcts = await loop.run_in_executor(None, _load_ai_mcts, ckpt_p1, num_sims)
+                    print(f"[ai_vs_ai] P1 loaded. Loading P2: {ckpt_p2}", flush=True)
+                    await ws.send_text(json.dumps({"loading": f"Loading P2 model ({ckpt_p2})…"}))
+                    p2_mcts = await loop.run_in_executor(None, _load_ai_mcts, ckpt_p2, num_sims)
+                    print(f"[ai_vs_ai] Both models loaded. Starting game.", flush=True)
+                except Exception as exc:
+                    print(f"[ai_vs_ai] ERROR: {exc}", flush=True)
+                    await ws.send_text(json.dumps({"error": f"Failed to load models: {exc}"}))
+                    continue
+                ai_mcts      = p1_mcts
+                ai_mcts_p2   = p2_mcts
+                ai_player    = 1
+                ai_player_2  = -1
+                state          = game_engine.get_initial_state()
+                current_player = 1
+                p1_label = ckpt_p1.split("/")[0]
+                p2_label = ckpt_p2.split("/")[0]
+                await ws.send_text(json.dumps(_state_payload(
+                    state, current_player,
+                    f"AI vs AI: {p1_label} (Red) vs {p2_label} (White)"
+                )))
                 try:
                     await do_ai_turn()
                 except Exception as exc:

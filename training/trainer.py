@@ -321,11 +321,23 @@ class Trainer:
                 self._upload_to_s3(latest_path, "checkpoint_latest")
                 self._upload_mlflow_db()
                 if promoted:
-                    best_path = checkpoints.save_best(ckpt_path, config.checkpoint_dir)
+                    best_path = os.path.join(config.checkpoint_dir, "checkpoint_best.pt")
+                    checkpoints.save_eval_snapshot(
+                        best_path, self.best_model, config, iteration, self._promotion_count
+                    )
                     tracker.log_model_artifact(ckpt_path, iteration)
                     self._upload_to_s3(best_path, "checkpoint_best")
                     self._upload_versioned_best_to_s3(best_path, iteration)
                 checkpoints.prune_old_checkpoints(config.checkpoint_dir, keep=1)
+
+                if result is not None:
+                    eval_stem = f"checkpoint_eval_{iteration:04d}"
+                    eval_path = os.path.join(config.checkpoint_dir, f"{eval_stem}.pt")
+                    checkpoints.save_eval_snapshot(
+                        eval_path, self.model, config, iteration, self._promotion_count
+                    )
+                    self._upload_to_s3(eval_path, eval_stem)
+                    checkpoints.prune_eval_snapshots(config.checkpoint_dir, keep=5)
 
                 self._write_status(iteration, policy_loss, value_loss)
 

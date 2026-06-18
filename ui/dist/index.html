@@ -224,7 +224,24 @@
       margin-top: 10px;
     }
 
-    /* ── Checkpoint selector panel ─────────────────────────────────────── */
+    /* ── Checkpoint selector panels ────────────────────────────────────── */
+
+    #ai-vs-ai-wrap {
+      width: min(90vw, 520px);
+      background: #0f0f1f;
+      border: 1px solid #2e1065;
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+    }
+
+    #ai-vs-ai-wrap h2 {
+      font-size: 1rem;
+      color: #a78bfa;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
 
     #checkpoint-select-wrap {
       width: min(90vw, 520px);
@@ -591,10 +608,11 @@
     <!-- AI configuration bar -->
     <div id="ai-config-bar">
       <div class="filter-group">
-        <span class="filter-label">Opponent</span>
+        <span class="filter-label">Mode</span>
         <select id="opp-select">
-          <option value="human">Human</option>
-          <option value="ai">AI</option>
+          <option value="human">Human vs Human</option>
+          <option value="ai">Human vs AI</option>
+          <option value="ai_vs_ai">Watch AI vs AI</option>
         </select>
       </div>
       <div class="filter-group" id="ai-side-group" style="display:none">
@@ -606,7 +624,7 @@
       </div>
     </div>
 
-    <!-- Checkpoint selector — shown when AI opponent is selected -->
+    <!-- Checkpoint selector — shown when Human vs AI is selected -->
     <div id="checkpoint-select-wrap" style="display:none">
       <h2>Select Model</h2>
       <div id="ckpt-filters">
@@ -622,6 +640,48 @@
         <option value="">— loading models… —</option>
       </select>
       <button id="btn-start-ai">Start Game</button>
+    </div>
+
+    <!-- AI vs AI panel -->
+    <div id="ai-vs-ai-wrap" style="display:none">
+      <h2>AI vs AI</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+        <div>
+          <div class="filter-label" style="margin-bottom:4px">Player 1 — Red</div>
+          <select id="ava-p1-run" style="width:100%;background:#1e1e3f;color:#e0e0e0;border:1px solid #4c1d95;border-radius:5px;padding:5px 8px;font-size:0.82rem;margin-bottom:4px">
+            <option value="">All runs</option>
+          </select>
+          <select id="ava-p1-model" size="4" style="width:100%;background:#1e1e3f;color:#e0e0e0;border:1px solid #4c1d95;border-radius:6px;padding:4px 0;font-size:0.82rem;cursor:pointer">
+            <option value="">— loading… —</option>
+          </select>
+        </div>
+        <div>
+          <div class="filter-label" style="margin-bottom:4px">Player 2 — White</div>
+          <select id="ava-p2-run" style="width:100%;background:#1e1e3f;color:#e0e0e0;border:1px solid #4c1d95;border-radius:5px;padding:5px 8px;font-size:0.82rem;margin-bottom:4px">
+            <option value="">All runs</option>
+          </select>
+          <select id="ava-p2-model" size="4" style="width:100%;background:#1e1e3f;color:#e0e0e0;border:1px solid #4c1d95;border-radius:6px;padding:4px 0;font-size:0.82rem;cursor:pointer">
+            <option value="">— loading… —</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px">
+        <div class="filter-group">
+          <span class="filter-label">Simulations</span>
+          <input type="number" id="ava-sims" value="200" min="1" max="2000"
+            style="width:70px;background:#1e1e3f;color:#e0e0e0;border:1px solid #4c1d95;border-radius:5px;padding:5px 8px;font-size:0.85rem">
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Pause between moves</span>
+          <select id="ava-delay" style="background:#1e1e3f;color:#e0e0e0;border:1px solid #4c1d95;border-radius:5px;padding:5px 8px;font-size:0.85rem">
+            <option value="0">None (MCTS speed)</option>
+            <option value="500">0.5 s</option>
+            <option value="1000">1 s</option>
+            <option value="2000">2 s</option>
+          </select>
+        </div>
+      </div>
+      <button id="btn-start-ava" style="width:100%;padding:9px 0;font-size:0.9rem">Start Match</button>
     </div>
 
     <div id="ai-thinking-bar"></div>
@@ -861,7 +921,8 @@ function connect() {
   ws = new WebSocket(`${proto}://${location.host}/ws/game`);
   ws.onmessage = (ev) => {
     const data = JSON.parse(ev.data);
-    if (data.error) { statusEl.textContent = '⚠ ' + data.error; return; }
+    if (data.error)   { statusEl.textContent = '⚠ ' + data.error; return; }
+    if (data.loading) { statusEl.textContent = data.loading; return; }
     aiThinking   = !!data.thinking;
     thinkingBar.style.display = aiThinking ? '' : 'none';
     gameState    = data;
@@ -1039,6 +1100,7 @@ fetch('/api/checkpoints').then(r => r.json()).then(ckpts => {
     filterEl.appendChild(o);
   });
   applyCheckpointFilters();
+  populateAvaSelects();
 }).catch(() => {
   aiModelSelect.innerHTML = '<option value="">Server offline</option>';
   document.getElementById('ckpt-count-badge').textContent = '';
@@ -1070,10 +1132,13 @@ function applyCheckpointFilters() {
 }
 
 oppSelect.addEventListener('change', () => {
-  const isAi = oppSelect.value === 'ai';
-  document.getElementById('checkpoint-select-wrap').style.display = isAi ? '' : 'none';
+  const val  = oppSelect.value;
+  const isAi  = val === 'ai';
+  const isAva = val === 'ai_vs_ai';
+  document.getElementById('checkpoint-select-wrap').style.display = isAi  ? '' : 'none';
+  document.getElementById('ai-vs-ai-wrap').style.display          = isAva ? '' : 'none';
   aiSideGroup.style.display = isAi ? '' : 'none';
-  if (!isAi) {
+  if (!isAi && !isAva) {
     send({ type: 'ai_config', checkpoint: '', human_player: 1 });
   }
 });
@@ -1093,6 +1158,56 @@ resetBtn.addEventListener('click', () => {
   drag = null;
   ghostEl.style.cssText = '';
   send({ type: 'reset' });
+});
+
+// ── AI vs AI ──────────────────────────────────────────────────────────────
+
+function _ckptLabel(c) {
+  return c.filename === 'checkpoint_best.pt'
+    ? `[${c.run}]  Best  ·  Iter ${c.iteration >= 0 ? c.iteration : '?'}`
+    : `[${c.run}]  Iter ${c.iteration}`;
+}
+
+function filterAvaModels(side) {
+  const runEl   = document.getElementById(`ava-${side}-run`);
+  const modelEl = document.getElementById(`ava-${side}-model`);
+  const runVal  = runEl.value;
+  const filtered = allCheckpoints.filter(c => !runVal || c.run === runVal);
+  modelEl.innerHTML = '<option value="">— choose model —</option>';
+  filtered.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.id; o.textContent = _ckptLabel(c);
+    modelEl.appendChild(o);
+  });
+}
+
+function populateAvaSelects() {
+  ['p1', 'p2'].forEach(side => {
+    const runEl = document.getElementById(`ava-${side}-run`);
+    const runs  = [...new Set(allCheckpoints.map(c => c.run))].filter(Boolean).sort();
+    runEl.innerHTML = '<option value="">All runs</option>';
+    runs.forEach(r => {
+      const o = document.createElement('option'); o.value = r; o.textContent = r;
+      runEl.appendChild(o);
+    });
+    runEl.addEventListener('change', () => filterAvaModels(side));
+    filterAvaModels(side);
+  });
+}
+
+document.getElementById('btn-start-ava').addEventListener('click', () => {
+  const p1Ckpt = document.getElementById('ava-p1-model').value;
+  const p2Ckpt = document.getElementById('ava-p2-model').value;
+  const sims   = parseInt(document.getElementById('ava-sims').value, 10) || 200;
+  const delay  = parseInt(document.getElementById('ava-delay').value, 10) || 0;
+  if (!p1Ckpt || !p2Ckpt) {
+    statusEl.textContent = 'Select a model for both players first.';
+    return;
+  }
+  selectedFrom = null; drag = null; ghostEl.style.cssText = '';
+  statusEl.textContent = 'Loading models…';
+  send({ type: 'ai_vs_ai', checkpoint_p1: p1Ckpt, checkpoint_p2: p2Ckpt,
+         simulations: sims, delay_ms: delay });
 });
 
 
