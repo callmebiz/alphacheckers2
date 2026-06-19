@@ -36,7 +36,7 @@ The Play/Training tabs at http://localhost:8000 update live while this runs.
 ```powershell
 mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
-→ **http://localhost:5000** — loss curves, ELO history, hyperparams, checkpoint artifacts
+→ **http://localhost:5000** — loss curves, win rates, hyperparams, checkpoint artifacts
 
 ---
 
@@ -102,7 +102,7 @@ Training ──────── policy loss (cross-entropy) + value loss (MSE)
 Tournament ─────── challenger vs best model; promote if win rate ≥ threshold
     │
     ▼
-MLflow ─────────── logs every metric, loss, ELO, and checkpoint artifact per run
+MLflow ─────────── logs every metric, loss, win rate, and checkpoint artifact per run
 ```
 
 ---
@@ -120,7 +120,6 @@ MLflow ─────────── logs every metric, loss, ELO, and check
 | [training/self_play.py](training/self_play.py) | Game generation with temperature schedule; saves replay JSONs |
 | [training/evaluator.py](training/evaluator.py) | Model tournament, Wilson CI on win rate, promotion gate |
 | [training/analysis.py](training/analysis.py) | Opening entropy, policy entropy, value calibration MAE |
-| [training/elo.py](training/elo.py) | ELO ratings persisted to JSON across runs |
 | [training/checkpoints.py](training/checkpoints.py) | Save / resume (always CPU-mapped for portability) |
 | [training/tracking.py](training/tracking.py) | MLflow wrapper — params, metrics, artifacts |
 | [training/trainer.py](training/trainer.py) | Main AlphaZero loop — self-play → train → evaluate → log |
@@ -137,7 +136,7 @@ MLflow ─────────── logs every metric, loss, ELO, and check
 | Game engine + tests | ✅ Done |
 | Neural network (encoder + ResNet) | ✅ Done |
 | MCTS | ✅ Done |
-| Training loop (self-play, tournament, ELO, MLflow) | ✅ Done |
+| Training loop (self-play, tournament, MLflow) | ✅ Done |
 | AI opponent in the UI | ⬜ Planned |
 
 ---
@@ -157,7 +156,6 @@ alphacheckers2/
 │   ├── self_play.py
 │   ├── evaluator.py
 │   ├── analysis.py
-│   ├── elo.py
 │   ├── checkpoints.py
 │   ├── tracking.py
 │   └── trainer.py
@@ -170,7 +168,7 @@ alphacheckers2/
 │   ├── test_encoder.py    # 15 tests
 │   ├── test_model.py      # 8 tests
 │   ├── test_mcts.py       # 14 tests
-│   └── test_training.py   # 22 tests  →  94 total
+│   └── test_training.py   # 28 tests  →  128 total
 ├── train.py
 ├── requirements.txt
 ├── PLAN.md

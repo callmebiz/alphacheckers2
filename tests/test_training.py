@@ -3,8 +3,9 @@ Tests for the training stack — replay buffer and checkpoints.
 
 Run: pytest tests/test_training.py -v
 """
-import os
 import copy
+import json
+import os
 import tempfile
 
 import numpy as np
@@ -170,13 +171,14 @@ class TestCheckpoints:
         opt2   = torch.optim.Adam(net2.parameters(), lr=1e-3)
         sch2   = torch.optim.lr_scheduler.MultiStepLR(opt2, milestones=[5])
 
-        iteration, buf2, promotion_count = checkpoints.load(
+        iteration, buf2, promotion_count, run_segment = checkpoints.load(
             path, net2, opt2, sch2, torch.device("cpu")
         )
 
         assert iteration        == 3
         assert len(buf2)        == 10
         assert promotion_count  == 5
+        assert run_segment      == 0
 
     def test_model_weights_preserved(self, small_net, enc, game, dummy_example, tmp_path):
         optimizer = torch.optim.Adam(small_net.parameters())
@@ -277,3 +279,60 @@ class TestReplayBufferPreallocated:
         buf2 = ReplayBuffer.from_state_dict(d)
         assert not buf2._preallocated
         assert len(buf2) == 5
+
+
+# ── Integration: full training iteration ─────────────────────────────────────
+# Runs one complete iteration of the AlphaZero loop (self-play → train →
+# evaluate → checkpoint) so cross-module regressions are caught before EC2.
+
+class TestTrainingLoop:
+    def test_one_iteration_produces_checkpoint(self, tmp_path):
+        from training.trainer import Trainer
+
+        config = copy.deepcopy(DEBUG)
+        config.training.num_iterations = 1
+        config.run_dir    = str(tmp_path)
+        config.mlflow_uri = f"sqlite:///{tmp_path}/mlflow_test.db"
+
+        Trainer(config).train()
+
+        assert os.path.exists(os.path.join(config.checkpoint_dir, "checkpoint_latest.pt"))
+
+    def test_one_iteration_writes_status(self, tmp_path):
+        from training.trainer import Trainer
+
+        config = copy.deepcopy(DEBUG)
+        config.training.num_iterations = 1
+        config.run_dir    = str(tmp_path)
+        config.mlflow_uri = f"sqlite:///{tmp_path}/mlflow_test.db"
+
+        Trainer(config).train()
+
+        with open(config.status_path) as f:
+            status = json.load(f)
+        assert status["iteration"] == 1
+        assert status["is_training"] is False
+
+    def test_resume_increments_run_segment(self, tmp_path):
+        from training.trainer import Trainer
+        from training import checkpoints
+
+        config = copy.deepcopy(DEBUG)
+        config.training.num_iterations = 2
+        config.run_dir    = str(tmp_path)
+        config.mlflow_uri = f"sqlite:///{tmp_path}/mlflow_test.db"
+
+        Trainer(config).train()
+
+        latest = checkpoints.find_latest(config.checkpoint_dir)
+        assert latest is not None
+
+        # Resume: run_segment should increment from 0 → 1
+        config2 = copy.deepcopy(DEBUG)
+        config2.training.num_iterations = 3
+        config2.run_dir    = str(tmp_path)
+        config2.mlflow_uri = f"sqlite:///{tmp_path}/mlflow_test.db"
+
+        t2 = Trainer(config2)
+        t2.train(resume_from=latest)
+        assert t2._run_segment == 1

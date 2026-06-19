@@ -59,7 +59,6 @@ Sophisticated AlphaZero-style checkers engine with a playable web UI.
   - Wilson score 95% CI on win rate; alternating colour assignment
 - [x] Game quality analysis (`training/analysis.py`)
   - Game length stats, draw rate, opening entropy, policy entropy, value calibration MAE
-- [x] ELO tracking (`training/elo.py`) — per-checkpoint, persisted to JSON
 - [x] Checkpoint save/resume (`training/checkpoints.py`)
   - Always saves to CPU for cross-device portability; auto-finds latest via glob
 - [x] MLflow tracking (`training/tracking.py`)

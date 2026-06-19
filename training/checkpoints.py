@@ -39,6 +39,7 @@ import glob
 import json
 import os
 import random
+import re
 import shutil
 import time
 
@@ -261,6 +262,38 @@ def prune_old_checkpoints(checkpoint_dir: str, keep: int = 1) -> None:
         for path in (old, old.replace(".pt", ".json")):
             try:
                 os.remove(path)
+            except OSError:
+                pass
+
+
+def prune_old_replays(replay_dir: str, keep_iters: int = 10) -> None:
+    """
+    Delete replay JSON files from iterations older than the most recent *keep_iters*.
+
+    Replay files are named iter{NNNN}_{id}.json and iter{NNNN}_tourn_{id}.json.
+    The latest keep_iters unique iteration numbers are kept; all older files are removed.
+    """
+    pattern  = os.path.join(replay_dir, "iter*.json")
+    files    = glob.glob(pattern)
+    if not files:
+        return
+
+    iter_re  = re.compile(r"iter(\d{4})_")
+    iter_nums: set[int] = set()
+    for f in files:
+        m = iter_re.search(os.path.basename(f))
+        if m:
+            iter_nums.add(int(m.group(1)))
+
+    if not iter_nums:
+        return
+
+    keep_set = set(sorted(iter_nums)[-keep_iters:])
+    for f in files:
+        m = iter_re.search(os.path.basename(f))
+        if m and int(m.group(1)) not in keep_set:
+            try:
+                os.remove(f)
             except OSError:
                 pass
 

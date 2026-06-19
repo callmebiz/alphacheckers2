@@ -111,7 +111,6 @@ These are **not** about which model won — they measure which *side* won (P1 = 
 
 | Metric | What it measures |
 |---|---|
-| `eval/elo` | ELO rating of the current best model at this iteration. Initialised to 1000; rises strictly when a challenger is promoted (since the challenger starts at the best model's ELO, any win rate >50% produces a higher post-tournament ELO). |
 | `eval/promoted` | 1 if the challenger was promoted this iteration, 0 if not. |
 
 ---
@@ -131,4 +130,4 @@ A **well-progressed run** (iteration 30+):
 - `selfplay/move_entropy_mean` lower (1.0–1.5)
 - `selfplay/top1_prob_mean` higher (0.65+)
 - `analysis/value_mae` lower (0.2–0.4)
-- `eval/elo` trending upward with each promotion
+- `eval/win_rate` consistently above promotion threshold

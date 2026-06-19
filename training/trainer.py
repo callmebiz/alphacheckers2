@@ -351,6 +351,7 @@ class Trainer:
                     self._upload_to_s3(eval_path, eval_stem)
                     checkpoints.prune_eval_snapshots(config.checkpoint_dir, keep=5)
 
+                checkpoints.prune_old_replays(config.replay_dir, keep_iters=10)
                 self._write_status(iteration, policy_loss, value_loss)
 
                 # Update outer bar — one summary line per iteration
