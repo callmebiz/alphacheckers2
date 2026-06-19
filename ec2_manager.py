@@ -276,6 +276,7 @@ def ssh_connect(ip: str, retries: int = 24, interval: int = 15) -> paramiko.SSHC
                 banner_timeout=60,
             )
             log("SSH connected")
+            client.get_transport().set_keepalive(30)
             return client
         except Exception as e:
             log(f"SSH attempt {attempt}/{retries}  - {e}")
@@ -291,16 +292,19 @@ def ssh_run(client: paramiko.SSHClient, cmd: str, timeout: int = 600) -> int:
     """
     full_cmd = f"bash -l << 'HEREDOC'\n{cmd}\nHEREDOC\n"
     chan = client.get_transport().open_session()
-    chan.get_pty()
-    chan.settimeout(timeout)
-    chan.exec_command(full_cmd)
-    while True:
-        if chan.recv_ready():
-            print(chan.recv(4096).decode(errors="replace"), end="", flush=True)
-        if chan.exit_status_ready() and not chan.recv_ready():
-            break
-        time.sleep(0.05)
-    return chan.recv_exit_status()
+    try:
+        chan.get_pty()
+        chan.settimeout(timeout)
+        chan.exec_command(full_cmd)
+        while True:
+            if chan.recv_ready():
+                print(chan.recv(4096).decode(errors="replace"), end="", flush=True)
+            if chan.exit_status_ready() and not chan.recv_ready():
+                break
+            time.sleep(0.05)
+        return chan.recv_exit_status()
+    finally:
+        chan.close()
 
 
 def ssh_run_bg(client: paramiko.SSHClient, cmd: str) -> None:
