@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """
 Examine an AlphaCheckers MLflow run DB.
@@ -51,7 +51,7 @@ def find_running_ec2() -> str | None:
 
 def fetch_db_from_ec2(ip: str, dest: str) -> str:
     """SCP the live mlflow.db from the running instance."""
-    print(f"Fetching live DB from EC2 {ip} …")
+    print(f"Fetching live DB from EC2 {ip}...")
     subprocess.run(
         ["scp", "-i", SSH_KEY,
          "-o", "StrictHostKeyChecking=no",
@@ -62,12 +62,12 @@ def fetch_db_from_ec2(ip: str, dest: str) -> str:
     return dest
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# --- helpers ---
 
 def download_db(s3_path: str, dest: str) -> str:
     bucket, key = s3_path.split("/", 1)
     uri = f"s3://{bucket}/{key}"
-    print(f"Downloading {uri} → {dest}")
+    print(f"Downloading {uri} -> {dest}")
     subprocess.run(["aws", "s3", "cp", uri, dest], check=True)
     return dest
 
@@ -78,7 +78,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     return con
 
 
-# ── query helpers ─────────────────────────────────────────────────────────────
+# --- query helpers ---
 
 def list_experiments(con: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in con.execute(
@@ -126,7 +126,7 @@ def get_params(con: sqlite3.Connection, run_id: str) -> dict[str, str]:
     return {r["key"]: r["value"] for r in rows}
 
 
-# ── display ───────────────────────────────────────────────────────────────────
+# --- display ---
 
 def fmt_val(v: float) -> str:
     if abs(v) >= 1000:
@@ -137,9 +137,9 @@ def fmt_val(v: float) -> str:
 
 
 def print_section(title: str) -> None:
-    print(f"\n{'─'*60}")
+    print(f"\n{'='*60}")
     print(f"  {title}")
-    print(f"{'─'*60}")
+    print(f"{'='*60}")
 
 
 def print_metric_table(metrics: dict[str, list[tuple[int, float]]], prefix: str) -> None:
@@ -155,8 +155,8 @@ def print_metric_table(metrics: dict[str, list[tuple[int, float]]], prefix: str)
         trend = ""
         if len(values) >= 2:
             delta = values[-1] - values[0]
-            trend = f"  Δ={delta:+.4f}" if abs(delta) >= 0.0001 else "  (flat)"
-        step_range = f"steps {steps[0]}–{steps[-1]}" if len(steps) > 1 else f"step {steps[0]}"
+            trend = f"  d={delta:+.4f}" if abs(delta) >= 0.0001 else "  (flat)"
+        step_range = f"steps {steps[0]}-{steps[-1]}" if len(steps) > 1 else f"step {steps[0]}"
         print(f"  {key:<40s}  {fmt_val(latest):>10s}   [{step_range}, n={len(vals)}]{trend}")
 
 
@@ -189,7 +189,7 @@ def print_all_iters(metrics: dict[str, list[tuple[int, float]]], keys: list[str]
         row = f"  {step:>5}  "
         for k in keys:
             v = lookup.get(k, {}).get(step)
-            row += f"  {fmt_val(v):>{col_w}}" if v is not None else f"  {'—':>{col_w}}"
+            row += f"  {fmt_val(v):>{col_w}}" if v is not None else f"  {'?':>{col_w}}"
         print(row)
 
 
@@ -240,7 +240,7 @@ def examine(db_path: str, experiment_name: str | None = None) -> None:
     n_iters = max((s for vals in all_metrics.values() for s, _ in vals), default=0)
     print(f"  Iterations logged: {n_iters}")
 
-    # ── params ────────────────────────────────────────────────────────────────
+    # --- params ---
     if all_params:
         print_section("Config / Params (sample)")
         important = ["num_simulations", "num_iterations", "num_self_play_games",
@@ -250,7 +250,7 @@ def examine(db_path: str, experiment_name: str | None = None) -> None:
             if k in all_params:
                 print(f"  {k:<30s}  {all_params[k]}")
 
-    # ── per-section summaries ─────────────────────────────────────────────────
+    # --- per-section summaries ---
     print_section("Loss metrics (latest values)")
     print_metric_table(all_metrics, "loss/")
 
@@ -267,8 +267,8 @@ def examine(db_path: str, experiment_name: str | None = None) -> None:
         print_section("Eval metrics (latest values)")
         print_metric_table(all_metrics, "eval/")
 
-    # ── iteration-by-iteration table ──────────────────────────────────────────
-    print_section("Iteration table — key metrics per step")
+    # --- iteration-by-iteration table ---
+    print_section("Iteration table - key metrics per step")
     tracked = [
         "loss/policy", "loss/value", "loss/total",
         "selfplay/draw_rate", "selfplay/avg_game_length",
@@ -283,7 +283,7 @@ def examine(db_path: str, experiment_name: str | None = None) -> None:
     con.close()
 
 
-# ── entry point ───────────────────────────────────────────────────────────────
+# --- entry point ---
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Examine an AlphaCheckers MLflow DB")
@@ -299,7 +299,7 @@ def main() -> None:
         if ip:
             db_path = fetch_db_from_ec2(ip, tmp)
         else:
-            print("No running EC2 instance found — downloading from S3...")
+            print("No running EC2 instance found - downloading from S3...")
             db_path = download_db(args.s3, tmp)
 
     examine(db_path, args.experiment)
