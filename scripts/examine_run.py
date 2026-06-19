@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Examine an AlphaCheckers MLflow run DB.
 
@@ -17,7 +19,6 @@ import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
 
 
 S3_DEFAULT    = "alphacheckers-biz/mlflow-exp-full.db"
@@ -29,7 +30,7 @@ SSH_USER      = "ec2-user"
 REMOTE_DB     = "~/alphacheckers2/mlflow.db"
 
 
-def find_running_ec2() -> Optional[str]:
+def find_running_ec2() -> str | None:
     """Return public IP of the running AlphaCheckers instance, or None."""
     try:
         r = subprocess.run(
@@ -192,7 +193,7 @@ def print_all_iters(metrics: dict[str, list[tuple[int, float]]], keys: list[str]
         print(row)
 
 
-def examine(db_path: str, experiment_name: Optional[str] = None) -> None:
+def examine(db_path: str, experiment_name: str | None = None) -> None:
     con = get_connection(db_path)
 
     experiments = list_experiments(con)
