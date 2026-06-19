@@ -177,12 +177,21 @@ class Trainer:
                 resume_from, self.model, self.optimizer, self.scheduler, self.device
             )
             self._run_segment = prev_segment + 1
-            self.best_model.load_state_dict(self.model.state_dict())
+            # Restore best_model from checkpoint if available (new format).
+            # Old checkpoints (saved before this fix) don't have best_model_state;
+            # fall back to copying self.model so both start from the same point.
+            best_model_state = checkpoints.load_best_model_state(resume_from)
+            self.best_model.load_state_dict(
+                best_model_state if best_model_state is not None else self.model.state_dict()
+            )
+            self.best_model.eval()
             n_buf   = len(self.buffer)
             free_gb = shutil.disk_usage(self.config.checkpoint_dir).free / 1024**3
             print(
                 f"Resumed iter {start_iter} | segment {self._run_segment} | "
                 f"promotions {self._promotion_count} | buffer {n_buf:,} | disk free {free_gb:.1f} GB"
+                + (" | best_model restored from checkpoint" if best_model_state is not None
+                   else " | best_model synced to model (legacy checkpoint)")
             )
 
         config = self.config
@@ -324,10 +333,11 @@ class Trainer:
                     config.checkpoint_dir, f"checkpoint_{iteration}.pt"
                 )
                 checkpoints.save(
-                    ckpt_path, self.best_model, self.optimizer, self.scheduler,
+                    ckpt_path, self.model, self.optimizer, self.scheduler,
                     iteration, self.buffer, self._promotion_count, config,
                     mlflow_run_id=tracker.run_id,
                     run_segment=self._run_segment,
+                    best_model=self.best_model,
                 )
                 latest_path = checkpoints.save_latest(ckpt_path, config.checkpoint_dir)
                 self._upload_to_s3(latest_path, "checkpoint_latest")

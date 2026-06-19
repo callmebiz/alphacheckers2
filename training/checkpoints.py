@@ -61,9 +61,14 @@ def save(
     config: RunConfig,
     mlflow_run_id: str = "",
     run_segment: int = 0,
+    best_model: torch.nn.Module | None = None,
 ) -> None:
     """
     Write a full training checkpoint to *path*.
+
+    model      — the challenger being trained (always saved as model_state)
+    best_model — the current best/promoted snapshot used for self-play (saved
+                 separately as best_model_state so both can be restored on resume)
 
     The model weights are detached to CPU before saving so the file can be
     loaded on any device. All other state is already CPU-resident.
@@ -88,6 +93,8 @@ def save(
             "cuda":    torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         },
     }
+    if best_model is not None:
+        payload["best_model_state"] = {k: v.cpu() for k, v in best_model.state_dict().items()}
 
     # Write to a temp file then rename so a mid-write SIGKILL never leaves a
     # partial checkpoint at the real path (os.replace is POSIX-atomic).
@@ -153,6 +160,19 @@ def load(
     iteration       = payload["iteration"]
 
     return iteration, buffer, promotion_count, run_segment
+
+
+def load_best_model_state(path: str) -> dict | None:
+    """
+    Return the best_model_state dict from a checkpoint, or None if absent.
+
+    Checkpoints saved before this fix only contain model_state (the challenger).
+    Checkpoints saved after this fix also contain best_model_state (the self-play
+    snapshot). On resume the trainer uses this to restore self.best_model so
+    gated-mode self-play continues from the correct frozen snapshot.
+    """
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    return payload.get("best_model_state")
 
 
 def _atomic_copy(src: str, dst: str) -> None:
