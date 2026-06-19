@@ -44,7 +44,7 @@ def list_experiments(con: sqlite3.Connection) -> list[dict]:
 
 def get_runs(con: sqlite3.Connection, experiment_id: str) -> list[dict]:
     return [dict(r) for r in con.execute(
-        """SELECT run_uuid, run_id, status, start_time, end_time
+        """SELECT run_uuid, status, start_time, end_time
            FROM runs WHERE experiment_id = ? ORDER BY start_time""",
         (experiment_id,)
     )]
@@ -182,7 +182,7 @@ def examine(db_path: str, experiment_name: str | None = None) -> None:
     all_metrics: dict[str, list[tuple[int, float]]] = defaultdict(list)
     all_params: dict[str, str] = {}
     for run in runs:
-        rid = run["run_uuid"] or run["run_id"]
+        rid = run["run_uuid"]
         m = get_metrics(con, rid)
         for k, vals in m.items():
             all_metrics[k].extend(vals)
