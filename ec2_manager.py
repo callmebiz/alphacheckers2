@@ -97,9 +97,42 @@ def _write_json_files() -> None:
     )
 
 
+def _drain_shutting_down(timeout: int = 120) -> None:
+    """
+    Wait for any exp-tagged instances in shutting-down state to fully terminate.
+
+    With a 32-vCPU spot quota and c6i.8xlarge consuming all 32, a new launch
+    while the old instance is still shutting down will fail with
+    MaxSpotInstanceCountExceeded.  Draining first ensures the quota is free.
+    """
+    deadline = time.time() + timeout
+    logged = False
+    while time.time() < deadline:
+        try:
+            ids = _aws(
+                "ec2", "describe-instances",
+                "--region", REGION,
+                "--filters",
+                f"Name=tag:AlphaCheckers-Experiment,Values={EXPERIMENT}",
+                "Name=instance-state-name,Values=shutting-down",
+                "--query", "Reservations[].Instances[].InstanceId",
+                "--output", "text",
+            )
+        except RuntimeError:
+            return  # can't check; proceed and let the launch fail if needed
+        if not ids or ids.strip() in ("", "None"):
+            return
+        if not logged:
+            log("Previous instance still shutting down — waiting for spot quota to free...")
+            logged = True
+        time.sleep(10)
+    log("Timed out waiting for previous instance to terminate — proceeding anyway")
+
+
 def launch_instance() -> str:
     """Try each AZ in order until a spot instance is successfully launched."""
     _write_json_files()
+    _drain_shutting_down()  # ensure old instance freed the vCPU quota before launching
     ami = _aws(
         "ssm", "get-parameter",
         "--name", "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
