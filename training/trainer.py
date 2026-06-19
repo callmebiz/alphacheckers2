@@ -242,6 +242,7 @@ class Trainer:
                 t_sp = time.time() - t0_sp
 
                 if self._shutdown:
+                    self._save_emergency(iteration - 1, tracker)
                     break  # stopped mid self-play; skip train/eval/log for this iteration
 
                 sp_policies      = [e[1] for e in examples]
@@ -260,6 +261,7 @@ class Trainer:
                     self.scheduler.step()
 
                 if self._shutdown:
+                    self._save_emergency(iteration - 1, tracker)
                     break
 
                 # ── Step 3: Evaluate ───────────────────────────────────────
@@ -281,6 +283,7 @@ class Trainer:
                     t_eval = time.time() - t0_eval
 
                     if self._shutdown:
+                        self._save_emergency(iteration - 1, tracker)
                         break  # discard partial tournament; don't promote on incomplete results
 
                     promoted = result.win_rate >= config.eval.promotion_threshold
@@ -564,6 +567,38 @@ class Trainer:
         if not failed:
             tqdm.write(f"  ✓ S3 versioned: {base}/{stem}.pt")
 
+    # ── Emergency checkpoint ──────────────────────────────────────────────────
+
+    def _save_emergency(self, resume_iter: int, tracker) -> None:
+        """
+        Save a checkpoint mid-iteration and upload to S3.
+
+        resume_iter is the iteration number stored in the file; the next run will
+        start at resume_iter + 1.  Pass (current_iteration - 1) when interrupted
+        before training completes so the run retries the current iteration with a
+        richer replay buffer (partial self-play examples are already in the buffer).
+
+        Exceptions are swallowed so a save failure never blocks clean exit.
+        """
+        try:
+            config = self.config
+            ckpt_path = os.path.join(
+                config.checkpoint_dir, f"checkpoint_{resume_iter}.pt"
+            )
+            checkpoints.save(
+                ckpt_path, self.model, self.optimizer, self.scheduler,
+                resume_iter, self.buffer, self._promotion_count, config,
+                mlflow_run_id=tracker.run_id,
+                run_segment=self._run_segment,
+                best_model=self.best_model,
+            )
+            latest_path = checkpoints.save_latest(ckpt_path, config.checkpoint_dir)
+            self._upload_to_s3(latest_path, "checkpoint_latest")
+            self._upload_mlflow_db()
+            tqdm.write(f"  Emergency checkpoint saved — next run resumes at iter {resume_iter + 1}")
+        except Exception as exc:
+            tqdm.write(f"  Emergency checkpoint FAILED: {exc}")
+
     # ── Signal handling ───────────────────────────────────────────────────────
 
     def _handle_signal(self, signum, *_) -> None:
@@ -576,7 +611,7 @@ class Trainer:
             tqdm.write("\nForce quit.")
             os._exit(1)
         if signum == signal.SIGTERM:
-            tqdm.write("\nSpot termination notice — stopping after current game.")
+            tqdm.write("\nSpot termination — stopping after current game, saving emergency checkpoint.")
         else:
-            tqdm.write("\nCtrl+C — stopping after current game. (Ctrl+C again to force quit.)")
+            tqdm.write("\nCtrl+C — stopping after current game, saving emergency checkpoint. (Ctrl+C again to force quit.)")
         self._shutdown = True

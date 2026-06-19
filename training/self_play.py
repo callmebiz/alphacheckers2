@@ -61,10 +61,11 @@ The current implementation is sequential for simplicity and Windows compat.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
+import time
 import uuid
-from concurrent.futures import as_completed
 from dataclasses import dataclass
 
 import numpy as np
@@ -451,21 +452,56 @@ def _generate_games_parallel(
     all_is_forced:  list[bool]  = []
 
     bar = tqdm(total=len(futures), desc="  self-play", unit="game", leave=False)
-    for fut in as_completed(futures):
-        examples, winner, num_moves, m_ent, m_top1, m_forced = fut.result()
-        all_examples.extend(examples)
-        total_moves += num_moves
-        all_entropies.extend(m_ent)
-        all_top1_probs.extend(m_top1)
-        all_is_forced.extend(m_forced)
-        if winner == 1:
-            p1_wins += 1
-        elif winner == -1:
-            p2_wins += 1
+    pending: set = set(futures)
+    shutdown_deadline: float | None = None
+
+    while pending:
+        # After shutdown, give running games 90 s to finish then abandon them.
+        if shutdown_deadline is not None:
+            remaining_s = max(0.0, shutdown_deadline - time.monotonic())
+            if remaining_s <= 0:
+                for f in pending:
+                    f.cancel()
+                break
         else:
-            draws += 1
-        bar.set_postfix(examples=len(all_examples))
-        bar.update(1)
+            remaining_s = None
+
+        done, pending = concurrent.futures.wait(
+            pending, timeout=remaining_s,
+            return_when=concurrent.futures.FIRST_COMPLETED,
+        )
+
+        for fut in done:
+            if fut.cancelled():
+                continue
+            try:
+                examples, winner, num_moves, m_ent, m_top1, m_forced = fut.result()
+            except Exception:
+                bar.update(1)
+                continue
+            all_examples.extend(examples)
+            total_moves += num_moves
+            all_entropies.extend(m_ent)
+            all_top1_probs.extend(m_top1)
+            all_is_forced.extend(m_forced)
+            if winner == 1:
+                p1_wins += 1
+            elif winner == -1:
+                p2_wins += 1
+            else:
+                draws += 1
+            bar.set_postfix(examples=len(all_examples))
+            bar.update(1)
+
+        if stop_fn() and shutdown_deadline is None:
+            # Start the clock; immediately cancel any queued (not-yet-running) futures.
+            shutdown_deadline = time.monotonic() + 90
+            n_cancelled = sum(1 for f in pending if f.cancel())
+            pending = {f for f in pending if not f.cancelled()}
+            if n_cancelled:
+                bar.total = (bar.total or 0) - n_cancelled
+                bar.refresh()
+
     bar.close()
 
     return _build_stats(p1_wins, p2_wins, draws, total_moves, all_examples,
