@@ -2,20 +2,62 @@
 Examine an AlphaCheckers MLflow run DB.
 
 Usage:
-    python scripts/examine_run.py [--db PATH] [--s3 BUCKET/KEY] [--experiment NAME]
+    python scripts/examine_run.py                         # auto-finds running EC2 instance
+    python scripts/examine_run.py --db PATH               # local DB file
+    python scripts/examine_run.py --s3 BUCKET/KEY         # download from S3
+    python scripts/examine_run.py --experiment NAME       # pick experiment by name
 
-Defaults to downloading mlflow-exp-full.db from S3 if --db is not provided.
+Default mode: discovers the running EC2 instance via AWS tags, SSHes in, and queries
+the live mlflow.db directly. Falls back to S3 download if no instance is running.
 """
 import argparse
-import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
 from collections import defaultdict
+from pathlib import Path
 
 
-S3_DEFAULT = "alphacheckers-biz/mlflow-exp-full.db"
+S3_DEFAULT    = "alphacheckers-biz/mlflow-exp-full.db"
+EC2_REGION    = "us-east-1"
+EC2_TAG_KEY   = "AlphaCheckers-Experiment"
+EC2_TAG_VALUE = "exp-full"
+SSH_KEY       = str(Path.home() / ".ssh" / "alphaCheckers.pem")
+SSH_USER      = "ec2-user"
+REMOTE_DB     = "~/alphacheckers2/mlflow.db"
+
+
+def find_running_ec2() -> str | None:
+    """Return public IP of the running AlphaCheckers instance, or None."""
+    try:
+        r = subprocess.run(
+            ["aws", "ec2", "describe-instances",
+             "--region", EC2_REGION,
+             "--filters",
+             f"Name=tag:{EC2_TAG_KEY},Values={EC2_TAG_VALUE}",
+             "Name=instance-state-name,Values=running",
+             "--query", "Reservations[0].Instances[0].PublicIpAddress",
+             "--output", "text"],
+            capture_output=True, text=True, timeout=15,
+        )
+        ip = r.stdout.strip()
+        return ip if ip and ip != "None" else None
+    except Exception:
+        return None
+
+
+def fetch_db_from_ec2(ip: str, dest: str) -> str:
+    """SCP the live mlflow.db from the running instance."""
+    print(f"Fetching live DB from EC2 {ip} …")
+    subprocess.run(
+        ["scp", "-i", SSH_KEY,
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "ConnectTimeout=10",
+         f"{SSH_USER}@{ip}:{REMOTE_DB}", dest],
+        check=True,
+    )
+    return dest
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -250,17 +292,12 @@ def main() -> None:
 
     db_path = args.db
     if db_path is None:
-        # check for already-downloaded copy next to the script or at project root
-        candidates = [
-            os.path.join(os.path.dirname(__file__), "..", "mlflow_exp-full.db"),
-            os.path.join(os.path.dirname(__file__), "..", "mlflow-exp-full.db"),
-        ]
-        existing = next((p for p in candidates if os.path.exists(p)), None)
-        if existing:
-            db_path = os.path.abspath(existing)
-            print(f"Using cached DB: {db_path}")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
+        ip = find_running_ec2()
+        if ip:
+            db_path = fetch_db_from_ec2(ip, tmp)
         else:
-            tmp = tempfile.mktemp(suffix=".db")
+            print("No running EC2 instance found — downloading from S3...")
             db_path = download_db(args.s3, tmp)
 
     examine(db_path, args.experiment)
