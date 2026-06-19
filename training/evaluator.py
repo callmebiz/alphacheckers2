@@ -90,38 +90,64 @@ class TournamentResult:
 
 # ── Parallel worker ───────────────────────────────────────────────────────────
 
+# Per-worker cached state — same pattern as self_play._W.
+_EW: dict = {}
+
+
 def _eval_worker(args: tuple):
     """
     Entry point for each tournament worker process.
 
-    Module-level so multiprocessing spawn can pickle it.  Receives both
-    models' weights as state_dicts (plain CPU-tensor dicts), reconstructs
-    them locally, plays one game, and returns the result.
+    Module-level so multiprocessing spawn can pickle it.  Both model objects
+    are built once per worker process and reused across tournament games.
+    Weights are reloaded only when the evaluation iteration changes.
     """
     (challenger_weights, champion_weights, config, game_idx,
      save_replay, replay_dir, mlflow_run_name, iteration) = args
-    game    = Checkers()
-    encoder = StateEncoder(game)
 
-    def _build(weights):
-        m = AlphaNet(
-            num_channels=encoder.num_channels,
-            action_size=game.action_size,
-            num_resblocks=config.model.num_resblocks,
-            num_hidden=config.model.num_hidden,
-        )
-        m.load_state_dict(weights)
-        m.eval()
-        return m
+    # One-time setup on first call in this worker process
+    if not _EW:
+        import os as _os
+        _os.environ.setdefault("OMP_NUM_THREADS", "1")
+        _os.environ.setdefault("MKL_NUM_THREADS", "1")
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+        game    = Checkers()
+        encoder = StateEncoder(game)
 
-    challenger = _build(challenger_weights)
-    champion   = _build(champion_weights)
-    mc         = config.mcts
-    device     = torch.device("cpu")
+        def _build_empty():
+            m = AlphaNet(
+                num_channels=encoder.num_channels,
+                action_size=game.action_size,
+                num_resblocks=config.model.num_resblocks,
+                num_hidden=config.model.num_hidden,
+            )
+            m.eval()
+            return m
+
+        _EW['game']       = game
+        _EW['encoder']    = encoder
+        _EW['challenger'] = _build_empty()
+        _EW['champion']   = _build_empty()
+        _EW['config']     = config
+        _EW['ver']        = None
+
+    # Reload weights only when entering a new tournament (new iteration)
+    if _EW['ver'] != iteration:
+        _EW['challenger'].load_state_dict(challenger_weights)
+        _EW['challenger'].eval()
+        _EW['champion'].load_state_dict(champion_weights)
+        _EW['champion'].eval()
+        _EW['ver'] = iteration
+
+    game    = _EW['game']
+    encoder = _EW['encoder']
+    mc      = config.mcts
+    device  = torch.device("cpu")
 
     eps    = config.eval.eval_noise_eps
-    mcts_c = _make_mcts(challenger, game, encoder, mc, device, noise=False, eval_noise_eps=eps)
-    mcts_m = _make_mcts(champion,   game, encoder, mc, device, noise=False, eval_noise_eps=eps)
+    mcts_c = _make_mcts(_EW['challenger'], game, encoder, mc, device, noise=False, eval_noise_eps=eps)
+    mcts_m = _make_mcts(_EW['champion'],   game, encoder, mc, device, noise=False, eval_noise_eps=eps)
 
     challenger_is_p1 = (game_idx % 2 == 0)
     p1_mcts, p2_mcts = (mcts_c, mcts_m) if challenger_is_p1 else (mcts_m, mcts_c)

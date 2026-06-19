@@ -137,6 +137,12 @@ def _move_entropy(probs: np.ndarray) -> float:
 
 # ── Parallel worker ───────────────────────────────────────────────────────────
 
+# Per-worker cached state.  In spawn mode each worker is a separate OS process
+# so this dict is independent per worker.  Persists between function calls
+# within the same process lifetime, eliminating repeated model construction.
+_W: dict = {}
+
+
 def _selfplay_worker(args: tuple):
     """
     Entry point for each self-play worker process.
@@ -144,23 +150,42 @@ def _selfplay_worker(args: tuple):
     Must be a module-level function so Python's multiprocessing spawn mode
     (used on Windows) can pickle and import it in the child process.
 
-    All game/model objects are reconstructed here from scratch — nothing is
-    shared across process boundaries except the model weights (state_dict,
-    a plain dict of CPU tensors) and the RunConfig (a picklable dataclass).
+    The model is built once per worker process and reused across games.
+    Weights are reloaded only when the iteration number changes (once per
+    iteration per worker), not once per game as before.
     """
-    weights, config, iteration, game_idx, save_replay, replay_dir, mlflow_run_name = args
-    game    = Checkers()
-    encoder = StateEncoder(game)
-    model   = AlphaNet(
-        num_channels=encoder.num_channels,
-        action_size=game.action_size,
-        num_resblocks=config.model.num_resblocks,
-        num_hidden=config.model.num_hidden,
-    )
-    model.load_state_dict(weights)
-    model.eval()
+    weights, config, iteration, game_idx, save_replay, replay_dir, mlflow_run_name, weights_ver = args
+
+    # One-time setup on the first call in this worker process
+    if not _W:
+        import os as _os
+        _os.environ.setdefault("OMP_NUM_THREADS", "1")
+        _os.environ.setdefault("MKL_NUM_THREADS", "1")
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+        game    = Checkers()
+        encoder = StateEncoder(game)
+        model   = AlphaNet(
+            num_channels=encoder.num_channels,
+            action_size=game.action_size,
+            num_resblocks=config.model.num_resblocks,
+            num_hidden=config.model.num_hidden,
+        )
+        model.eval()
+        _W['game']    = game
+        _W['encoder'] = encoder
+        _W['model']   = model
+        _W['config']  = config
+        _W['ver']     = None
+
+    # Reload weights only when the iteration advances (once per worker per iter)
+    if _W['ver'] != weights_ver:
+        _W['model'].load_state_dict(weights)
+        _W['model'].eval()
+        _W['ver'] = weights_ver
+
     return play_game(
-        game, encoder, model, config, torch.device("cpu"),
+        _W['game'], _W['encoder'], _W['model'], _W['config'], torch.device("cpu"),
         save_replay=save_replay,
         replay_dir=replay_dir,
         iteration=iteration,
@@ -416,7 +441,7 @@ def _generate_games_parallel(
         if stop_fn():
             break
         save = (game_idx % save_replay_every == 0)
-        args = (weights, config, iteration, game_idx, save, config.replay_dir, mlflow_run_name)
+        args = (weights, config, iteration, game_idx, save, config.replay_dir, mlflow_run_name, iteration)
         futures.append(executor.submit(_selfplay_worker, args))
 
     all_examples: list = []

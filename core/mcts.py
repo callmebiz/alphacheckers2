@@ -179,6 +179,8 @@ class MCTS:
     device          : PyTorch device for inference.
     cache_size      : Max unique positions to cache per MCTS instance. Each
                       entry stores policy + value + valid-move array (~700 B).
+                      At 800 sims the 2048 default fills within a few moves;
+                      8192 gives meaningful cross-move transposition reuse.
     """
 
     def __init__(
@@ -191,7 +193,7 @@ class MCTS:
         dirichlet_eps: float = 0.25,
         dirichlet_alpha: float = 0.3,
         device: torch.device | None = None,
-        cache_size: int = 2048,
+        cache_size: int = 8192,
     ):
         self.game            = game
         self.encoder         = encoder
