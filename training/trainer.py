@@ -78,6 +78,16 @@ from training.analysis import (
 from training import checkpoints
 
 
+def _worker_process_init() -> None:
+    """Run once per worker process at pool startup to pin thread counts."""
+    import os as _os
+    _os.environ["OMP_NUM_THREADS"] = "1"
+    _os.environ["MKL_NUM_THREADS"] = "1"
+    import torch as _torch
+    _torch.set_num_threads(1)
+    _torch.set_num_interop_threads(1)
+
+
 def _warn_low_disk(path: str, min_gb: float = 5.0) -> None:
     free_gb = shutil.disk_usage(path).free / 1024**3
     if free_gb < min_gb:
@@ -148,7 +158,11 @@ class Trainer:
         # Use spawn context on all platforms to avoid fork-safety deadlocks
         # when torch/numpy internal threads hold locks at fork time.
         self._executor = (
-            ProcessPoolExecutor(max_workers=n_workers, mp_context=get_context("spawn"))
+            ProcessPoolExecutor(
+                max_workers=n_workers,
+                mp_context=get_context("spawn"),
+                initializer=_worker_process_init,
+            )
             if n_workers > 1 else None
         )
 

@@ -107,11 +107,6 @@ def _eval_worker(args: tuple):
 
     # One-time setup on first call in this worker process
     if not _EW:
-        import os as _os
-        _os.environ.setdefault("OMP_NUM_THREADS", "1")
-        _os.environ.setdefault("MKL_NUM_THREADS", "1")
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
         game    = Checkers()
         encoder = StateEncoder(game)
 
